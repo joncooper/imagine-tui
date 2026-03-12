@@ -304,3 +304,154 @@ func TestEventQueueEnqueueAfterClose(_ *testing.T) {
 	// Should not panic.
 	q.Enqueue(&Event{Type: "click", Source: "btn1"})
 }
+
+func TestEventQueueDebounceRealtime(t *testing.T) {
+	// Test events arriving DURING the debounce window.
+	q := NewEventQueue()
+	defer q.Close()
+
+	// Enqueue first event to start the debounce.
+	q.Enqueue(&Event{Type: "change", Source: "input1", Data: map[string]any{"v": "a"}})
+
+	done := make(chan *Event, 1)
+	go func() {
+		ctx := context.Background()
+		evt, _ := q.Dequeue(ctx, &DequeueOpts{DebounceMs: 100})
+		done <- evt
+	}()
+
+	// Send more events during the debounce window.
+	time.Sleep(30 * time.Millisecond)
+	q.Enqueue(&Event{Type: "change", Source: "input1", Data: map[string]any{"v": "b"}})
+	time.Sleep(30 * time.Millisecond)
+	q.Enqueue(&Event{Type: "change", Source: "input1", Data: map[string]any{"v": "c"}})
+
+	select {
+	case evt := <-done:
+		if evt == nil {
+			t.Fatal("got nil event")
+		}
+		// Should get the last event with coalesced count.
+		if evt.Data["v"] != "c" {
+			t.Errorf("expected last value 'c', got %v", evt.Data["v"])
+		}
+		if evt.CoalescedCount < 2 {
+			t.Errorf("coalesced_count = %d, want >= 2", evt.CoalescedCount)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("debounce didn't complete")
+	}
+}
+
+func TestEventQueueFilterMultipleSources(t *testing.T) {
+	q := NewEventQueue()
+	defer q.Close()
+
+	q.Enqueue(&Event{Type: "click", Source: "btn1"})
+	q.Enqueue(&Event{Type: "click", Source: "btn2"})
+	q.Enqueue(&Event{Type: "click", Source: "btn3"})
+
+	ctx := context.Background()
+	opts := &DequeueOpts{Filter: []string{"btn2", "btn3"}}
+
+	// Should get btn2 first (FIFO among matches).
+	evt, err := q.Dequeue(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Source != "btn2" {
+		t.Errorf("source = %q, want btn2", evt.Source)
+	}
+
+	// Then btn3.
+	evt, err = q.Dequeue(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Source != "btn3" {
+		t.Errorf("source = %q, want btn3", evt.Source)
+	}
+
+	// btn1 should remain.
+	evt, err = q.Dequeue(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Source != "btn1" {
+		t.Errorf("remaining source = %q, want btn1", evt.Source)
+	}
+}
+
+func TestEventQueueDoubleClose(_ *testing.T) {
+	q := NewEventQueue()
+	q.Close()
+	// Second close should not panic.
+	q.Close()
+}
+
+// TestEventContextAutoCollection documents that context and dom_summary
+// are caller-populated fields. Auto-collection from the tree is deferred
+// to the render layer (M5), which has access to the live tree state.
+// The event queue itself is tree-agnostic by design.
+func TestEventContextAutoCollection(t *testing.T) {
+	// Build a tree and manually collect context, as the render layer will do.
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("value", "hello")
+	tree.Find("a2").SetProp("value", "world")
+
+	// Simulate what the render layer will do: collect sibling context.
+	source := tree.Find("b1")
+	parent := source.Parent()
+	eventCtx := make(map[string]map[string]any)
+	for _, sibling := range parent.Children {
+		if sibling.ID != source.ID && len(sibling.Props) > 0 {
+			eventCtx[sibling.ID] = copyMap(sibling.Props)
+		}
+	}
+
+	q := NewEventQueue()
+	defer q.Close()
+	q.Enqueue(&Event{
+		Type:       "click",
+		Source:     "b1",
+		Context:    eventCtx,
+		DOMSummary: tree.Summary(),
+	})
+
+	ctx := context.Background()
+	evt, err := q.Dequeue(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.DOMSummary != "root(a(a1, a2), b(b1))" {
+		t.Errorf("dom_summary = %q", evt.DOMSummary)
+	}
+	// In this case b1's parent is b, and b has no other children with props,
+	// so context should be empty. This documents the expected pattern.
+	if len(evt.Context) != 0 {
+		t.Errorf("expected empty context for b1 (no siblings with props), got %v", evt.Context)
+	}
+}
+
+func TestEventDataField(t *testing.T) {
+	q := NewEventQueue()
+	defer q.Close()
+
+	q.Enqueue(&Event{
+		Type:   "change",
+		Source: "input1",
+		Data:   map[string]any{"value": "typed text", "cursor": 10},
+	})
+
+	ctx := context.Background()
+	evt, err := q.Dequeue(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Data["value"] != "typed text" {
+		t.Errorf("data value = %v", evt.Data["value"])
+	}
+	if evt.Data["cursor"] != 10 {
+		t.Errorf("data cursor = %v", evt.Data["cursor"])
+	}
+}

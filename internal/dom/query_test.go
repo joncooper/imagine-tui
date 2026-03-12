@@ -5,6 +5,7 @@ import (
 )
 
 func TestQuerySingleNode(t *testing.T) {
+	t.Parallel()
 	tree := makeTestTree(t)
 	tree.Find("a1").SetProp("text", "hello")
 	tree.Find("a1").SetProp("style", "bold")
@@ -32,6 +33,7 @@ func TestQuerySingleNode(t *testing.T) {
 }
 
 func TestQueryMultipleNodes(t *testing.T) {
+	t.Parallel()
 	tree := makeTestTree(t)
 	tree.Find("a1").SetProp("text", "first")
 	tree.Find("b1").SetProp("label", "click me")
@@ -78,6 +80,7 @@ func TestQueryAllNonexistent(t *testing.T) {
 }
 
 func TestQueryEmptyList(t *testing.T) {
+	t.Parallel()
 	tree := makeTestTree(t)
 	results, errs := tree.Query([]string{})
 	if len(results) != 0 {
@@ -143,6 +146,7 @@ func TestQueryIncludesParentID(t *testing.T) {
 }
 
 func TestQueryRootHasNoParent(t *testing.T) {
+	t.Parallel()
 	tree := makeTestTree(t)
 	results, errs := tree.Query([]string{"root"})
 	if len(errs) != 0 {

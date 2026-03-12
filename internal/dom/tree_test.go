@@ -352,3 +352,77 @@ func TestTreeSummarySingleNode(t *testing.T) {
 		t.Errorf("Summary = %q, want root", tree.Summary())
 	}
 }
+
+func TestTreeSummaryNilRoot(t *testing.T) {
+	tree := &Tree{Root: nil}
+	if tree.Summary() != "" {
+		t.Errorf("Summary of nil root = %q, want empty", tree.Summary())
+	}
+}
+
+func TestRebuildFullIndex(t *testing.T) {
+	tree := makeTestTree(t)
+
+	// Manually corrupt the index.
+	tree.index = make(map[string]*Node)
+
+	// Rebuild should restore it.
+	if err := tree.RebuildFullIndex(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"root", "a", "a1", "a2", "b", "b1"} {
+		if tree.Find(id) == nil {
+			t.Errorf("%q not found after RebuildFullIndex", id)
+		}
+	}
+}
+
+func TestTreeInsertAtEnd(t *testing.T) {
+	tree := makeTestTree(t)
+	last, _ := NewNode("last", TypeText)
+	if err := tree.Insert("a", last, "a2"); err != nil {
+		t.Fatal(err)
+	}
+	a := tree.Find("a")
+	if a.Children[len(a.Children)-1].ID != "last" {
+		t.Error("expected 'last' at end of children")
+	}
+}
+
+func TestTreeRemoveUpdatesParentChildCount(t *testing.T) {
+	tree := makeTestTree(t)
+	b := tree.Find("b")
+	if len(b.Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(b.Children))
+	}
+	if _, err := tree.Remove("b1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Children) != 0 {
+		t.Errorf("expected 0 children after remove, got %d", len(b.Children))
+	}
+}
+
+func TestTreeMoveSameParent(t *testing.T) {
+	tree := makeTestTree(t)
+	if err := tree.Move("a2", "a", ""); err != nil {
+		t.Fatal(err)
+	}
+	a := tree.Find("a")
+	if a.Children[len(a.Children)-1].ID != "a2" {
+		t.Errorf("a2 should be last child, got %s", a.Children[len(a.Children)-1].ID)
+	}
+}
+
+func TestTreeWalkSingleNode(t *testing.T) {
+	root, _ := NewNode("solo", TypeContainer)
+	tree, _ := NewTree(root)
+	var ids []string
+	tree.Walk(func(n *Node) bool {
+		ids = append(ids, n.ID)
+		return true
+	})
+	if len(ids) != 1 || ids[0] != "solo" {
+		t.Errorf("walk on single node: %v", ids)
+	}
+}

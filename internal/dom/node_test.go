@@ -66,6 +66,7 @@ func TestNewNode(t *testing.T) {
 }
 
 func TestNodeProps(t *testing.T) {
+	t.Parallel()
 	n, err := NewNode("test", TypeText)
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +90,7 @@ func TestNodeProps(t *testing.T) {
 }
 
 func TestNodeDeepCopy(t *testing.T) {
+	t.Parallel()
 	parent, _ := NewNode("parent", TypeContainer)
 	child, _ := NewNode("child", TypeText)
 	child.SetProp("text", "hello")
@@ -131,6 +133,7 @@ func TestNodeDeepCopy(t *testing.T) {
 }
 
 func TestIsValidType(t *testing.T) {
+	t.Parallel()
 	valid := []NodeType{TypeContainer, TypeText, TypeInput, TypeTextarea, TypeSelect,
 		TypeButton, TypeTable, TypeList, TypeDiff, TypeLog, TypeCode,
 		TypeTabs, TypeProgress, TypeTree, TypeModal, TypeForm}
@@ -148,6 +151,7 @@ func TestIsValidType(t *testing.T) {
 }
 
 func TestDeepCopyNestedProps(t *testing.T) {
+	t.Parallel()
 	n, _ := NewNode("test", TypeTable)
 	n.SetProp("rows", []any{
 		map[string]any{"name": "Alice", "age": 30},
@@ -164,6 +168,28 @@ func TestDeepCopyNestedProps(t *testing.T) {
 	origRows := n.Props["rows"].([]any)
 	if origRows[0].(map[string]any)["name"] != "Alice" {
 		t.Error("original nested prop was modified by copy mutation")
+	}
+}
+
+func TestDeepCopyNilNode(t *testing.T) {
+	t.Parallel()
+	var n *Node
+	cp := n.deepCopy()
+	if cp != nil {
+		t.Error("deep copy of nil should be nil")
+	}
+}
+
+func TestDeepCopyNilMaps(t *testing.T) {
+	t.Parallel()
+	// Verify copyMap and copyStringMap handle nil by returning initialized maps.
+	m := copyMap(nil)
+	if m == nil {
+		t.Error("copyMap(nil) should return initialized map")
+	}
+	sm := copyStringMap(nil)
+	if sm == nil {
+		t.Error("copyStringMap(nil) should return initialized map")
 	}
 }
 

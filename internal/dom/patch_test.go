@@ -426,6 +426,198 @@ func TestPatchRemoveThenInsertSameID(t *testing.T) {
 	}
 }
 
+func TestPatchErrorFormat(t *testing.T) {
+	pe := &PatchError{OpIndex: 2, Op: OpUpdate, Message: "node \"x\" not found"}
+	got := pe.Error()
+	if got != `patch op[2] update: node "x" not found` {
+		t.Errorf("Error() = %q", got)
+	}
+}
+
+func TestPatchRemoveEmptyID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpRemove, ID: ""},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ID")
+	}
+}
+
+func TestPatchMoveEmptyID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpMove, ID: "", ParentID: "root"},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ID")
+	}
+}
+
+func TestPatchMoveMissingParentID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpMove, ID: "b1", ParentID: ""},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty parent_id")
+	}
+}
+
+func TestPatchInsertMissingParentID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "", ID: "x", NodeType: TypeText},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty parent_id")
+	}
+}
+
+func TestPatchInsertMissingID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", ID: "", NodeType: TypeText},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ID")
+	}
+}
+
+func TestPatchInsertFlatWithScriptsAndComputed(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", ID: "scripted", NodeType: TypeText,
+			Props:    map[string]any{"text": "hi"},
+			Scripts:  map[string]string{"on_mount": "init()"},
+			Computed: map[string]string{"display": "return 'x'"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := tree.Find("scripted")
+	if n.Scripts["on_mount"] != "init()" {
+		t.Error("scripts not set on flat insert")
+	}
+	if n.Computed["display"] != "return 'x'" {
+		t.Error("computed not set on flat insert")
+	}
+}
+
+func TestPatchInsertSpecWithScriptsAndComputed(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", Node: &NodeSpec{
+			ID:       "s_node",
+			Type:     TypeButton,
+			Scripts:  map[string]string{"on_click": "handleClick()"},
+			Computed: map[string]string{"label": "return 'Go'"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := tree.Find("s_node")
+	if n.Scripts["on_click"] != "handleClick()" {
+		t.Error("scripts not set on spec insert")
+	}
+	if n.Computed["label"] != "return 'Go'" {
+		t.Error("computed not set on spec insert")
+	}
+}
+
+func TestPatchInsertInvalidType(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", ID: "bad", NodeType: "sparkline"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid type")
+	}
+}
+
+func TestPatchInsertSpecInvalidType(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", Node: &NodeSpec{
+			ID: "bad", Type: "sparkline",
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid type in spec")
+	}
+}
+
+func TestPatchDuplicateUpdateSameNode(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpUpdate, ID: "a1", Props: map[string]any{"text": "first"}},
+		{Op: OpUpdate, ID: "a1", Props: map[string]any{"text": "second", "color": "blue"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := tree.Find("a1")
+	if v, _ := n.GetProp("text"); v != "second" {
+		t.Errorf("text = %v, want second (last write wins)", v)
+	}
+	if v, _ := n.GetProp("color"); v != "blue" {
+		t.Errorf("color = %v, want blue", v)
+	}
+}
+
+func TestPatchRollbackOpIndex(t *testing.T) {
+	tree := makeTestTree(t)
+	// Insert succeeds, insert succeeds, move fails (cycle) — index should be 2.
+	err := tree.Patch([]PatchOp{
+		{Op: OpInsert, ParentID: "root", ID: "c1", NodeType: TypeText},
+		{Op: OpInsert, ParentID: "root", ID: "c2", NodeType: TypeText},
+		{Op: OpMove, ID: "a", ParentID: "a1"}, // cycle
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	pe := err.(*PatchError)
+	if pe.OpIndex != 2 {
+		t.Errorf("OpIndex = %d, want 2", pe.OpIndex)
+	}
+	if pe.Op != OpMove {
+		t.Errorf("Op = %q, want move", pe.Op)
+	}
+	// c1 and c2 should be rolled back.
+	if tree.Find("c1") != nil || tree.Find("c2") != nil {
+		t.Error("rolled-back nodes still in tree")
+	}
+}
+
+func TestPatchUpdateOverwriteScript(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").Scripts["on_mount"] = "old"
+
+	if err := tree.Patch([]PatchOp{
+		{Op: OpUpdate, ID: "a1", Scripts: map[string]string{"on_mount": "new"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tree.Find("a1").Scripts["on_mount"] != "new" {
+		t.Error("script overwrite failed")
+	}
+}
+
+func TestPatchMoveToRoot(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpMove, ID: "b1", ParentID: "root"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Find("b1").Parent().ID != "root" {
+		t.Error("b1 should be child of root")
+	}
+}
+
 // Test JSON round-trip for PatchOp serialization.
 func TestPatchOpJSON(t *testing.T) {
 	ops := []PatchOp{

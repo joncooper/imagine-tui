@@ -1,8 +1,16 @@
 package dom_test
 
-import "testing"
+import (
+	"testing"
 
-func TestPlaceholder(t *testing.T) {
-	// Placeholder — real tests will be written TDD-style per M1 tickets.
-	t.Log("dom package skeleton OK")
+	"github.com/charmbracelet/bubbles/textinput"
+)
+
+func TestBubblesImport(t *testing.T) {
+	// Verify bubbles dependency is available.
+	ti := textinput.New()
+	if ti.Placeholder != "" {
+		t.Fatal("expected empty placeholder")
+	}
+	t.Log("bubbles import OK")
 }

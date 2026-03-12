@@ -1,16 +1,17 @@
 version: "2"
 
+formatters:
+  enable:
+    - gofmt
+
 linters:
   enable:
     - errcheck
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - misspell
-    - gofmt
     - revive
     - gocritic
     - nolintlint
@@ -39,7 +40,7 @@ linters-settings:
 
 output:
   formats:
-    - format: colored-line-number
+    colored-line-number: {}
 
 issues:
   max-issues-per-linter: 50

@@ -116,14 +116,14 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 ### Step 5: M3-4 — emit()
 **Files:** `emit.go`, `emit_test.go`
 
-- [ ] `makeEmitFn(sourceNodeID)` returns a Go function exposed to JS
-- [ ] `emit('local', [...ops])`: marshal JS value → JSON → `dom.ParsePatchOps()` → `tree.Patch()`
-- [ ] `emit('claude', {data})`: build `dom.Event{Type: "script", Source: nodeID, Data: data}` → `events.Enqueue()`
-- [ ] Invalid target → JS TypeError via `panic(rt.vm.NewTypeError(...))`
-- [ ] Test: `emit('local', [{op:'update', id:'x', props:{text:'hi'}}])` applies patch to tree
-- [ ] Test: `emit('local', invalidOps)` throws
-- [ ] Test: `emit('claude', {action:'submit'})` enqueues event with correct source/data
-- [ ] Test: `emit('bad', {})` throws TypeError
+- [x] `makeEmitFn(sourceNodeID)` returns a Go function exposed to JS
+- [x] `emit('local', [...ops])`: marshal JS value → JSON → `dom.ParsePatchOps()` → `tree.Patch()`
+- [x] `emit('claude', {data})`: build `dom.Event{Type: "script", Source: nodeID, Data: data}` → `events.Enqueue()`
+- [x] Invalid target → JS TypeError via `panic(rt.vm.NewTypeError(...))`
+- [x] Test: `emit('local', [{op:'update', id:'x', props:{text:'hi'}}])` applies patch to tree
+- [x] Test: `emit('local', invalidOps)` throws
+- [x] Test: `emit('claude', {action:'submit'})` enqueues event with correct source/data
+- [x] Test: `emit('bad', {})` throws TypeError
 
 ### Step 6: M3-6 — Script Lifecycle Hooks
 **Files:** `hooks.go`, `hooks_test.go`

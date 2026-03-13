@@ -163,6 +163,9 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	state := rt.getOrCreateState(node.ID)
 	_ = rt.vm.Set("state", state)
 
+	// Bind emit function.
+	_ = rt.vm.Set("emit", rt.makeEmitFn(node.ID))
+
 	// Bind event payload if present.
 	if payload != nil {
 		_ = rt.vm.Set("event", rt.vm.ToValue(payload))

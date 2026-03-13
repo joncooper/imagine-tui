@@ -105,7 +105,7 @@ func NewServer() (*Server, error) {
 	}
 
 	s.srv = mcp.NewServer(&mcp.Implementation{
-		Name:    "imagine-tui",
+		Name:    "imagine_tui",
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
@@ -256,10 +256,9 @@ func patchTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "patch",
 		Description: "Apply an ordered list of atomic operations to the TUI DOM tree. Supported ops: update, insert, remove, move, append.",
-		InputSchema: inputSchema(
-			prop("ops", "array", "Ordered list of patch operations (update, insert, remove, move, append). Append op: {op: \"append\", id: \"node-id\", prop: \"lines\", values: [...]}"),
-			"ops",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"ops": {Type: "array", Description: "Ordered list of patch operations (update, insert, remove, move, append). Append op: {op: \"append\", id: \"node-id\", prop: \"lines\", values: [...]}"},
+		}, "ops"),
 	}
 }
 
@@ -267,13 +266,11 @@ func replaceTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "replace",
 		Description: "Replace an entire subtree or the whole tree",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("target_id", "string", "ID of the node whose children will be replaced. If omitted, replaces the entire tree."),
-				prop("tree", "object", "Full tree spec for whole-tree replacement (when target_id is omitted)"),
-				prop("children", "array", "Array of node specs to replace the target's children"),
-			),
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"target_id": {Type: "string", Description: "ID of the node whose children will be replaced. If omitted, replaces the entire tree."},
+			"tree":      {Type: "object", Description: "Full tree spec for whole-tree replacement (when target_id is omitted)"},
+			"children":  {Type: "array", Description: "Array of node specs to replace the target's children"},
+		}),
 	}
 }
 
@@ -281,13 +278,11 @@ func awaitEventTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "await_event",
 		Description: "Long-poll: block until a Claude-routed event fires, then return it with context",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("timeout_ms", "number", "Return timeout:true after this many milliseconds if no event fires"),
-				prop("filter", "array", "Array of node IDs to listen to. Events from other nodes are held."),
-				prop("debounce_ms", "number", "Coalesce rapid events within this window (ms)"),
-			),
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"timeout_ms":  {Type: "number", Description: "Return timeout:true after this many milliseconds if no event fires"},
+			"filter":      {Type: "array", Description: "Array of node IDs to listen to. Events from other nodes are held."},
+			"debounce_ms": {Type: "number", Description: "Coalesce rapid events within this window (ms)"},
+		}),
 	}
 }
 
@@ -295,10 +290,9 @@ func snapshotTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "snapshot",
 		Description: "Save the current DOM state under a name",
-		InputSchema: inputSchema(
-			prop("name", "string", "Name for this snapshot"),
-			"name",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"name": {Type: "string", Description: "Name for this snapshot"},
+		}, "name"),
 	}
 }
 
@@ -306,10 +300,9 @@ func restoreTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "restore",
 		Description: "Restore the DOM to a previously saved snapshot",
-		InputSchema: inputSchema(
-			prop("name", "string", "Name of the snapshot to restore"),
-			"name",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"name": {Type: "string", Description: "Name of the snapshot to restore"},
+		}, "name"),
 	}
 }
 
@@ -317,43 +310,61 @@ func queryTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "query",
 		Description: "Read back current state of specific nodes",
-		InputSchema: inputSchema(
-			prop("ids", "array", "Array of node IDs to query"),
-			"ids",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"ids": {Type: "array", Description: "Array of node IDs to query"},
+		}, "ids"),
 	}
 }
 
-// --- Schema helpers ---
+// --- Schema types ---
 
-func prop(name, typ, desc string) map[string]any {
-	return map[string]any{
-		name: map[string]any{
-			"type":        typ,
-			"description": desc,
-		},
+// JSONSchema is a minimal JSON Schema object for MCP tool input schemas.
+type JSONSchema struct {
+	Type        string                `json:"type"`
+	Description string                `json:"description,omitempty"`
+	Properties  map[string]JSONSchema `json:"properties,omitempty"`
+	Required    []string              `json:"required,omitempty"`
+}
+
+// schema builds a JSONSchema with the given properties and required fields.
+// An empty properties map is always allocated so it serializes as {} not null.
+func schema(props map[string]JSONSchema, required ...string) JSONSchema {
+	if props == nil {
+		props = map[string]JSONSchema{}
+	}
+	return JSONSchema{
+		Type:       "object",
+		Properties: props,
+		Required:   required,
 	}
 }
 
-func mergeProps(props ...map[string]any) map[string]any {
-	merged := make(map[string]any)
-	for _, p := range props {
-		for k, v := range p {
-			merged[k] = v
-		}
-	}
-	return merged
+// --- Tool response types ---
+
+type okResult struct {
+	OK bool `json:"ok"`
 }
 
-func inputSchema(properties map[string]any, required ...string) map[string]any {
-	schema := map[string]any{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
+type okCountResult struct {
+	OK        bool `json:"ok"`
+	NodeCount int  `json:"node_count,omitempty"`
+	Count     int  `json:"count,omitempty"`
+	Removed   int  `json:"removed,omitempty"`
+}
+
+type okNameResult struct {
+	OK       bool   `json:"ok"`
+	Name     string `json:"name,omitempty"`
+	Restored string `json:"restored,omitempty"`
+}
+
+type timeoutResult struct {
+	Timeout bool `json:"timeout"`
+}
+
+type queryResult struct {
+	Results map[string]*dom.QueryResult `json:"results"`
+	Errors  []string                    `json:"errors,omitempty"`
 }
 
 // --- Tool handlers ---
@@ -389,7 +400,7 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 
 	s.logger.Info("patch: success")
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true})
+	return jsonResult(okResult{OK: true})
 }
 
 func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -429,7 +440,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		s.mu.Unlock()
 		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
 		s.notifyMutation()
-		return jsonResult(map[string]any{"ok": true, "node_count": nodeCount})
+		return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 	}
 
 	// Subtree replacement.
@@ -449,7 +460,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	s.mu.Unlock()
 
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true})
+	return jsonResult(okResult{OK: true})
 }
 
 func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -479,7 +490,7 @@ func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest)
 	if err != nil {
 		// Check if this was a timeout.
 		if deqCtx.Err() != nil && input.TimeoutMs > 0 {
-			return jsonResult(map[string]any{"timeout": true})
+			return jsonResult(timeoutResult{Timeout: true})
 		}
 		return errResult(fmt.Sprintf("await_event: %v", err)), nil
 	}
@@ -514,7 +525,7 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult(err.Error()), nil
 	}
 
-	return jsonResult(map[string]any{"ok": true, "name": input.Name})
+	return jsonResult(okNameResult{OK: true, Name: input.Name})
 }
 
 func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -539,7 +550,7 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true, "restored": input.Name})
+	return jsonResult(okNameResult{OK: true, Restored: input.Name})
 }
 
 func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -561,16 +572,13 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	results, errs := s.tree.Query(input.IDs)
 	s.mu.Unlock()
 
-	resp := map[string]any{
-		"results": results,
-	}
+	resp := queryResult{Results: results}
 	if len(errs) > 0 {
-		errStrs := make([]string, len(errs))
+		resp.Errors = make([]string, len(errs))
 		for i, e := range errs {
-			errStrs[i] = e.Error()
+			resp.Errors[i] = e.Error()
 		}
-		resp["errors"] = errStrs
-		s.logger.Warn("query: some IDs not found", "errors", errStrs)
+		s.logger.Warn("query: some IDs not found", "errors", resp.Errors)
 	}
 
 	return jsonResult(resp)
@@ -582,10 +590,9 @@ func layoutTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "layout",
 		Description: "Define or replace the UI structure. Container nodes may include an item_template prop for use with set_items/append_items. Idempotent.",
-		InputSchema: inputSchema(
-			prop("tree", "object", "Full tree spec. Container nodes may include an item_template prop with {{key}} placeholders."),
-			"tree",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"tree": {Type: "object", Description: "Full tree spec. Container nodes may include an item_template prop with {{key}} placeholders."},
+		}, "tree"),
 	}
 }
 
@@ -593,13 +600,10 @@ func setItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "set_items",
 		Description: "Populate a list, table, log, or templated container with data. For list nodes: items are {id, label, badge, style}. For table nodes: items are row objects. For log nodes: items are {text, level, timestamp}. For containers with item_template: items are expanded through the template. Replaces all existing items.",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("target", "string", "ID of the list node or container with item_template"),
-				prop("items", "array", "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders."),
-			),
-			"target", "items",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"target": {Type: "string", Description: "ID of the list node or container with item_template"},
+			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders."},
+		}, "target", "items"),
 	}
 }
 
@@ -607,13 +611,10 @@ func appendItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "append_items",
 		Description: "Append data items to a list, table, log, or templated container without replacing existing items.",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("target", "string", "ID of the list node or container with item_template"),
-				prop("items", "array", "Array of data objects to append"),
-			),
-			"target", "items",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"target": {Type: "string", Description: "ID of the list node or container with item_template"},
+			"items":  {Type: "array", Description: "Array of data objects to append"},
+		}, "target", "items"),
 	}
 }
 
@@ -621,13 +622,10 @@ func removeItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "remove_items",
 		Description: "Remove items from a list, table, log, or templated container. For list/table/log nodes: keys match item id fields. For containers: keys compute child IDs as {target}-{key}.",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("target", "string", "ID of the list node or container"),
-				prop("keys", "array", "Array of item keys to remove"),
-			),
-			"target", "keys",
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"target": {Type: "string", Description: "ID of the list node or container"},
+			"keys":   {Type: "array", Description: "Array of item keys to remove"},
+		}, "target", "keys"),
 	}
 }
 
@@ -635,11 +633,9 @@ func describeWidgetsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_widgets",
 		Description: "List available widget types with their props, events, and capabilities. Call this before building a UI to discover what widgets you can use. Optionally filter by type.",
-		InputSchema: inputSchema(
-			mergeProps(
-				prop("type", "string", "Optional: filter to a specific widget type (e.g. \"list\", \"table\")"),
-			),
-		),
+		InputSchema: schema(map[string]JSONSchema{
+			"type": {Type: "string", Description: "Optional: filter to a specific widget type (e.g. \"list\", \"table\")"},
+		}),
 	}
 }
 
@@ -669,7 +665,7 @@ func describeScriptingTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_scripting",
 		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, and state. Call this to learn how to add client-side logic to widgets.",
-		InputSchema: inputSchema(nil),
+		InputSchema: schema(nil),
 	}
 }
 
@@ -716,6 +712,7 @@ func scriptingCatalog() *scriptingInfo {
 		Hooks: []hookInfo{
 			{Name: "on_mount", Description: "Runs once when the node enters the DOM"},
 			{Name: "on_change", Description: "Runs when the node's value prop changes (inputs, selects)"},
+			{Name: "on_submit", Description: "Runs when the user presses Enter on an input. Script runs first for instant feedback, then the event is still forwarded to the agent."},
 			{Name: "on_event", Description: "Runs when a child node emits an event (bubbles up)"},
 			{Name: "on_focus", Description: "Runs when the node receives focus"},
 			{Name: "on_blur", Description: "Runs when the node loses focus"},
@@ -736,7 +733,7 @@ func scriptingCatalog() *scriptingInfo {
 		},
 		Globals: []apiEntry{
 			{Name: "emit('local', patchOps)", Description: "Apply a DOM patch synchronously from within the script (no MCP round-trip)"},
-			{Name: "emit('claude', data)", Description: "Queue an event for the MCP client (delivered via await_event)"},
+			{Name: "emit('agent', data)", Description: "Queue an event for the MCP client (delivered via await_event)"},
 			{Name: "state", Description: "Per-node persistent JavaScript object — survives across hook invocations"},
 			{Name: "event", Description: "The hook payload object (e.g., key info for on_key, value for on_change). Only defined during hook execution."},
 			{Name: "debug(...args)", Description: "Log to the server's debug output (not visible in TUI)"},
@@ -756,7 +753,7 @@ func scriptingCatalog() *scriptingInfo {
 			},
 			{
 				Title: "on_change hook: filter a list when input changes",
-				Code:  `{"scripts": {"on_change": "emit('claude', {action: 'filter', query: $.value})"}}`,
+				Code:  `{"scripts": {"on_change": "emit('agent', {action: 'filter', query: $.value})"}}`,
 			},
 		},
 	}
@@ -799,7 +796,7 @@ func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*m
 
 	s.logger.Info("layout: success", "node_count", nodeCount)
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true, "node_count": nodeCount})
+	return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 }
 
 func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -835,7 +832,7 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 
 	s.logger.Info("set_items: success")
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true, "count": len(items)})
+	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
 func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -871,7 +868,7 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 
 	s.logger.Info("append_items: success")
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true, "count": len(items)})
+	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
 func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -907,7 +904,7 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 
 	s.logger.Info("remove_items: success")
 	s.notifyMutation()
-	return jsonResult(map[string]any{"ok": true, "removed": len(keys)})
+	return jsonResult(okCountResult{OK: true, Removed: len(keys)})
 }
 
 // --- Helpers ---

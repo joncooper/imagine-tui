@@ -20,7 +20,7 @@ type ToolHandler = func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolRes
 
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
 type Server struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	tree     *dom.Tree
 	events   *dom.EventQueue
 	snaps    *dom.SnapshotStore
@@ -76,6 +76,17 @@ func (s *Server) Events() *dom.EventQueue {
 // Snapshots returns the snapshot store.
 func (s *Server) Snapshots() *dom.SnapshotStore {
 	return s.snaps
+}
+
+// RLock acquires a read lock on the server's state. Use this when reading
+// the DOM tree from a goroutine that may run concurrently with MCP mutations.
+func (s *Server) RLock() {
+	s.mu.RLock()
+}
+
+// RUnlock releases the read lock.
+func (s *Server) RUnlock() {
+	s.mu.RUnlock()
 }
 
 // Shutdown signals the server to stop. Closes the event queue.

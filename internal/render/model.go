@@ -83,36 +83,47 @@ func (m Model) View() string {
 		return m.renderDisconnected()
 	}
 
+	m.server.RLock()
+	defer m.server.RUnlock()
 	return m.widgets.Render(m.server.Tree(), m.width, m.height, m.focusedID)
 }
 
 // syncState synchronizes the widget tree and focus ring with the current DOM.
 func (m *Model) syncState() {
+	m.server.RLock()
+	defer m.server.RUnlock()
 	_ = m.widgets.Sync(m.server.Tree())
 	m.focus = BuildFocusRing(m.server.Tree())
 }
 
-// handleKey processes keyboard input.
+// handleKey processes keyboard input. Acquires a read lock on the server to
+// protect against concurrent MCP mutations while reading the DOM tree.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.server.Shutdown()
 		return m, tea.Quit
 
-	case tea.KeyTab:
-		m.focusedID = m.focusTab(true)
-		return m, nil
-
-	case tea.KeyShiftTab:
-		m.focusedID = m.focusTab(false)
-		return m, nil
-
 	default:
-		// Route to focused widget.
-		if m.focusedID != "" {
-			return m.routeKeyToWidget(msg)
+		m.server.RLock()
+		defer m.server.RUnlock()
+
+		switch msg.Type {
+		case tea.KeyTab:
+			m.focusedID = m.focusTab(true)
+			return m, nil
+
+		case tea.KeyShiftTab:
+			m.focusedID = m.focusTab(false)
+			return m, nil
+
+		default:
+			// Route to focused widget.
+			if m.focusedID != "" {
+				return m.routeKeyToWidget(msg)
+			}
+			return m, nil
 		}
-		return m, nil
 	}
 }
 

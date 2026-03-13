@@ -145,18 +145,21 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 ### Step 7: M3-7 — Computed Props
 **Files:** `computed.go`, `computed_test.go`
 
-- [ ] `DepGraph` with forward map (`depKey → set of nodeIDs read`) and reverse map (`nodeID → []depKey`)
-- [ ] `depKey{NodeID, PropName}` identifies a computed prop
-- [ ] `EvalComputed(nodeID, propName, expr)`: set `currentEval`, run expression, capture `$('id')` calls as deps, update DepGraph, return exported value
-- [ ] `propagateChanges()`: iterate dirty nodes → find dependents via reverse map → re-evaluate → set prop → loop until no new dirty (with iteration cap to prevent infinite loops)
-- [ ] Cycle detection: DFS on forward graph before evaluation
-- [ ] `EvalAllComputed()`: walk tree, evaluate all nodes' computed props in topological order
-- [ ] Test: `computed.text = "return $('qty').value * 2"` evaluates correctly
-- [ ] Test: changing `qty.value` triggers re-eval
-- [ ] Test: dep graph updated when expression reads different nodes on re-eval
-- [ ] Test: `A depends on B depends on A` → cycle error
-- [ ] Test: error in expression → ScriptError with node ID
-- [ ] Test: computed prop depending on another computed prop (transitive deps)
+- [x] `DepGraph` with forward map (`depKey → set of nodeIDs read`) and reverse map (`nodeID → []depKey`)
+- [x] `depKey{NodeID, PropName}` identifies a computed prop
+- [x] `EvalComputed(nodeID, propName, expr)`: set `currentEval`, run expression, capture `$('id')` calls as deps, update DepGraph, return exported value
+- [x] `PropagateChanges()`: iterate dirty nodes → find dependents via reverse map → re-evaluate → set prop → loop until no new dirty (with iteration cap)
+- [x] Cycle detection: follows dirty propagation chain to detect if re-evaluating a computed prop would trigger itself
+- [x] `EvalAllComputed()`: walk tree, evaluate all nodes' computed props recursively
+- [x] Test: basic computed prop evaluates correctly
+- [x] Test: cross-node read in computed prop
+- [x] Test: dependency tracking recorded correctly
+- [x] Test: changing dependency triggers re-eval via PropagateChanges
+- [x] Test: dep graph updated when expression reads different nodes on re-eval
+- [x] Test: `A depends on B depends on A` → cycle error
+- [x] Test: error in expression → Error with node ID
+- [x] Test: computed prop depending on another computed prop (transitive deps)
+- [x] Test: EvalAllComputed evaluates all computed props in tree
 
 ---
 

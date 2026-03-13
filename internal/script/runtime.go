@@ -16,14 +16,16 @@ const defaultTimeout = 10 * time.Millisecond
 // Runtime is the script execution engine for a session.
 // It owns a single goja VM and manages per-node state.
 type Runtime struct {
-	mu       sync.Mutex
-	vm       *goja.Runtime
-	tree     *dom.Tree
-	events   *dom.EventQueue
-	states   map[string]*goja.Object // nodeID -> persistent JS state
-	dirty    map[string]bool         // nodes modified since last propagation
-	timeout  time.Duration
-	debugLog func(string)
+	mu          sync.Mutex
+	vm          *goja.Runtime
+	tree        *dom.Tree
+	events      *dom.EventQueue
+	states      map[string]*goja.Object // nodeID -> persistent JS state
+	deps        *DepGraph               // computed prop dependency tracking
+	dirty       map[string]bool         // nodes modified since last propagation
+	currentEval *evalCtx                // non-nil during computed prop eval
+	timeout     time.Duration
+	debugLog    func(string)
 }
 
 // Option configures the Runtime.
@@ -50,6 +52,7 @@ func New(tree *dom.Tree, events *dom.EventQueue, opts ...Option) *Runtime {
 		tree:    tree,
 		events:  events,
 		states:  make(map[string]*goja.Object),
+		deps:    newDepGraph(),
 		dirty:   make(map[string]bool),
 		timeout: defaultTimeout,
 	}
@@ -175,9 +178,25 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 }
 
 // recordDep records a dependency on the given nodeID during computed prop evaluation.
-// No-op unless a computed prop evaluation is in progress.
-func (rt *Runtime) recordDep(_ string) {
-	// Will be implemented in the computed props step (M3-7).
+// No-op unless a computed prop evaluation is in progress. Must be called with rt.mu held.
+func (rt *Runtime) recordDep(nodeID string) {
+	if rt.currentEval != nil {
+		rt.currentEval.accessed[nodeID] = true
+	}
+}
+
+// startTimeout starts a timeout timer that interrupts the VM.
+// Must be called with rt.mu held. Returns the timer to be stopped.
+func (rt *Runtime) startTimeout() *time.Timer {
+	return time.AfterFunc(rt.timeout, func() {
+		rt.vm.Interrupt("script timeout")
+	})
+}
+
+// stopTimeout stops the timeout timer and clears the interrupt flag.
+func (rt *Runtime) stopTimeout(timer *time.Timer) {
+	timer.Stop()
+	rt.vm.ClearInterrupt()
 }
 
 // HookPayload is the data passed to a hook script.

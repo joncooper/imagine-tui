@@ -56,9 +56,12 @@ func (rt *Runtime) NotifyMount(nodeID string) error {
 }
 
 // NotifyRemove should be called when a node is removed from the tree.
-// Cleans up per-node state.
+// Cleans up per-node state and dependency graph entries.
 func (rt *Runtime) NotifyRemove(nodeID string) {
 	rt.removeState(nodeID)
+	rt.mu.Lock()
+	rt.deps.RemoveNode(nodeID)
+	rt.mu.Unlock()
 }
 
 // NotifyChange should be called when a node's value changes.

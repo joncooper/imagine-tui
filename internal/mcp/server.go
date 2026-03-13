@@ -15,13 +15,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// ToolHandler is the signature for a tool handler function.
+type ToolHandler = func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error)
+
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
 type Server struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	tree     *dom.Tree
 	events   *dom.EventQueue
 	snaps    *dom.SnapshotStore
 	srv      *mcp.Server
+	handlers map[string]ToolHandler // tool name -> handler, for direct invocation
 	shutdown chan struct{}
 }
 
@@ -41,6 +45,7 @@ func NewServer() (*Server, error) {
 		tree:     tree,
 		events:   dom.NewEventQueue(),
 		snaps:    dom.NewSnapshotStore(),
+		handlers: make(map[string]ToolHandler),
 		shutdown: make(chan struct{}),
 	}
 
@@ -71,6 +76,17 @@ func (s *Server) Events() *dom.EventQueue {
 // Snapshots returns the snapshot store.
 func (s *Server) Snapshots() *dom.SnapshotStore {
 	return s.snaps
+}
+
+// RLock acquires a read lock on the server's state. Use this when reading
+// the DOM tree from a goroutine that may run concurrently with MCP mutations.
+func (s *Server) RLock() {
+	s.mu.RLock()
+}
+
+// RUnlock releases the read lock.
+func (s *Server) RUnlock() {
+	s.mu.RUnlock()
 }
 
 // Shutdown signals the server to stop. Closes the event queue.
@@ -120,15 +136,43 @@ type queryInput struct {
 	IDs []string `json:"ids"`
 }
 
+// CallTool invokes a tool handler directly by name. Useful for integration
+// testing without going through the full MCP transport.
+func (s *Server) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal args: %w", err)
+	}
+
+	handler, ok := s.handlers[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown tool: %q", name)
+	}
+
+	req := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Name:      name,
+			Arguments: argsJSON,
+		},
+	}
+
+	return handler(ctx, req)
+}
+
 // --- Tool registration ---
 
 func (s *Server) registerTools() {
-	s.srv.AddTool(patchTool(), s.handlePatch)
-	s.srv.AddTool(replaceTool(), s.handleReplace)
-	s.srv.AddTool(awaitEventTool(), s.handleAwaitEvent)
-	s.srv.AddTool(snapshotTool(), s.handleSnapshot)
-	s.srv.AddTool(restoreTool(), s.handleRestore)
-	s.srv.AddTool(queryTool(), s.handleQuery)
+	s.addTool(patchTool(), s.handlePatch)
+	s.addTool(replaceTool(), s.handleReplace)
+	s.addTool(awaitEventTool(), s.handleAwaitEvent)
+	s.addTool(snapshotTool(), s.handleSnapshot)
+	s.addTool(restoreTool(), s.handleRestore)
+	s.addTool(queryTool(), s.handleQuery)
+}
+
+func (s *Server) addTool(tool *mcp.Tool, handler ToolHandler) {
+	s.srv.AddTool(tool, handler)
+	s.handlers[tool.Name] = handler
 }
 
 func patchTool() *mcp.Tool {

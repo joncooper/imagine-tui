@@ -15,32 +15,27 @@ linters:
     - revive
     - gocritic
     - nolintlint
-
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-      - name: var-naming
-      - name: blank-imports
-      - name: context-as-argument
-      - name: error-return
-      - name: error-strings
-      - name: increment-decrement
-      - name: range
-      - name: receiver-naming
-      - name: indent-error-flow
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-    disabled-checks:
-      - hugeParam
-  misspell:
-    locale: US
-
-output:
-  formats:
-    colored-line-number: {}
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+        - name: blank-imports
+        - name: context-as-argument
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: indent-error-flow
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+      disabled-checks:
+        - hugeParam
+    misspell:
+      locale: US
 
 issues:
   max-issues-per-linter: 50

@@ -44,6 +44,11 @@ func (b *Bridge) NotifyDOMChanged() {
 	b.program.Send(DOMChangedMsg{})
 }
 
+// NotifyConnected notifies the BubbleTea program that a new MCP client connected.
+func (b *Bridge) NotifyConnected() {
+	b.program.Send(MCPConnectedMsg{})
+}
+
 // NotifyDisconnected notifies the BubbleTea program that MCP has disconnected.
 func (b *Bridge) NotifyDisconnected(err error) {
 	b.program.Send(MCPDisconnectedMsg{Err: err})

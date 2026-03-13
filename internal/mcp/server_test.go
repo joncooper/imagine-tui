@@ -171,6 +171,9 @@ func TestServerListsAllTools(t *testing.T) {
 	expected := map[string]bool{
 		"patch": false, "replace": false, "await_event": false,
 		"snapshot": false, "restore": false, "query": false,
+		"layout": false, "set_items": false, "append_items": false, "remove_items": false,
+		"describe_widgets":   false,
+		"describe_scripting": false,
 	}
 
 	for _, tool := range result.Tools {
@@ -1199,6 +1202,18 @@ func callHandlerDirect(t *testing.T, s *Server, toolName string, args map[string
 		result, err = s.handleRestore(ctx, req)
 	case "query":
 		result, err = s.handleQuery(ctx, req)
+	case "layout":
+		result, err = s.handleLayout(ctx, req)
+	case "set_items":
+		result, err = s.handleSetItems(ctx, req)
+	case "append_items":
+		result, err = s.handleAppendItems(ctx, req)
+	case "remove_items":
+		result, err = s.handleRemoveItems(ctx, req)
+	case "describe_widgets":
+		result, err = s.handleDescribeWidgets(ctx, req)
+	case "describe_scripting":
+		result, err = s.handleDescribeScripting(ctx, req)
 	default:
 		t.Fatalf("unknown tool: %s", toolName)
 	}
@@ -1207,4 +1222,573 @@ func callHandlerDirect(t *testing.T, s *Server, toolName string, args map[string
 		t.Fatalf("tool %q returned error: %v", toolName, err)
 	}
 	return result
+}
+
+// --- Mutation callback tests ---
+
+func TestOnMutationCallback(t *testing.T) {
+	t.Run("patch fires callback on success", func(t *testing.T) {
+		e := setupWithTree(t)
+		var mu sync.Mutex
+		calls := 0
+		e.server.SetOnMutation(func() {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+		})
+
+		e.call(t, "patch", map[string]any{
+			"ops": []any{
+				map[string]any{"op": "update", "id": "header", "props": map[string]any{"text": "Updated"}},
+			},
+		})
+
+		mu.Lock()
+		defer mu.Unlock()
+		if calls != 1 {
+			t.Fatalf("expected 1 mutation callback, got %d", calls)
+		}
+	})
+
+	t.Run("patch does not fire callback on error", func(t *testing.T) {
+		e := setup(t)
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		r := e.call(t, "patch", map[string]any{
+			"ops": []any{
+				map[string]any{"op": "update", "id": "nonexistent", "props": map[string]any{"text": "x"}},
+			},
+		})
+
+		text := resultText(t, r)
+		if !strings.Contains(text, "not found") {
+			t.Fatalf("expected error about not found, got: %s", text)
+		}
+		if calls != 0 {
+			t.Fatalf("expected 0 mutation callbacks on error, got %d", calls)
+		}
+	})
+
+	t.Run("replace whole tree fires callback", func(t *testing.T) {
+		e := setup(t)
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		e.call(t, "replace", map[string]any{
+			"tree": map[string]any{
+				"id":   "root",
+				"type": "container",
+				"children": []any{
+					map[string]any{"id": "child", "type": "text", "props": map[string]any{"content": "hi"}},
+				},
+			},
+		})
+
+		if calls != 1 {
+			t.Fatalf("expected 1 mutation callback, got %d", calls)
+		}
+	})
+
+	t.Run("replace subtree fires callback", func(t *testing.T) {
+		e := setupWithTree(t)
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		e.call(t, "replace", map[string]any{
+			"target_id": "main",
+			"children": []any{
+				map[string]any{"id": "new_child", "type": "text", "props": map[string]any{"content": "replaced"}},
+			},
+		})
+
+		if calls != 1 {
+			t.Fatalf("expected 1 mutation callback, got %d", calls)
+		}
+	})
+
+	t.Run("restore fires callback", func(t *testing.T) {
+		e := setupWithTree(t)
+
+		// Take a snapshot first.
+		e.call(t, "snapshot", map[string]any{"name": "before"})
+
+		// Mutate.
+		e.call(t, "patch", map[string]any{
+			"ops": []any{
+				map[string]any{"op": "update", "id": "header", "props": map[string]any{"text": "Changed"}},
+			},
+		})
+
+		// Now register callback and restore.
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		e.call(t, "restore", map[string]any{"name": "before"})
+
+		if calls != 1 {
+			t.Fatalf("expected 1 mutation callback, got %d", calls)
+		}
+	})
+
+	t.Run("snapshot does not fire callback", func(t *testing.T) {
+		e := setupWithTree(t)
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		e.call(t, "snapshot", map[string]any{"name": "test"})
+
+		if calls != 0 {
+			t.Fatalf("expected 0 mutation callbacks for snapshot, got %d", calls)
+		}
+	})
+
+	t.Run("query does not fire callback", func(t *testing.T) {
+		e := setupWithTree(t)
+		calls := 0
+		e.server.SetOnMutation(func() { calls++ })
+
+		e.call(t, "query", map[string]any{"ids": []any{"header"}})
+
+		if calls != 0 {
+			t.Fatalf("expected 0 mutation callbacks for query, got %d", calls)
+		}
+	})
+}
+
+// =============================================================================
+// Template-driven data tools: layout, set_items, append_items, remove_items
+// =============================================================================
+
+// setupWithTemplate creates a connected env and uses layout to set a tree
+// with an item_template on the "log-list" container.
+func setupWithTemplate(t *testing.T) *testEnv {
+	t.Helper()
+	e := setup(t)
+
+	r := e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"children": []any{
+				map[string]any{"id": "header", "type": "text", "props": map[string]any{"content": "Log Viewer"}},
+				map[string]any{
+					"id":   "log-list",
+					"type": "container",
+					"props": map[string]any{
+						"item_template": map[string]any{
+							"type": "container",
+							"props": map[string]any{
+								"direction": "row",
+							},
+							"children": []any{
+								map[string]any{"type": "text", "props": map[string]any{"content": "{{level}}", "width": 8}},
+								map[string]any{"type": "text", "props": map[string]any{"content": "{{msg}}"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if r.IsError {
+		t.Fatalf("setup template failed: %s", resultText(t, r))
+	}
+	return e
+}
+
+func TestLayoutTool_WholeTree(t *testing.T) {
+	e := setup(t)
+
+	result := e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id":   "app",
+			"type": "container",
+			"children": []any{
+				map[string]any{"id": "header", "type": "text", "props": map[string]any{"content": "App"}},
+			},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+	m := resultMap(t, result)
+	if m["ok"] != true {
+		t.Errorf("expected ok:true, got %v", m)
+	}
+
+	if e.server.Tree().Root.ID != "app" {
+		t.Errorf("root ID = %q, want app", e.server.Tree().Root.ID)
+	}
+	if e.server.Tree().Find("header") == nil {
+		t.Error("header should exist")
+	}
+}
+
+func TestLayoutTool_WithItemTemplate(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	// Verify the item_template is stored as a prop.
+	list := e.server.Tree().Find("log-list")
+	if list == nil {
+		t.Fatal("log-list not found")
+	}
+	tmpl, ok := list.Props["item_template"]
+	if !ok {
+		t.Fatal("item_template prop not found")
+	}
+	tmplMap, ok := tmpl.(map[string]any)
+	if !ok {
+		t.Fatalf("item_template is %T, want map[string]any", tmpl)
+	}
+	if tmplMap["type"] != "container" {
+		t.Errorf("template type = %v, want container", tmplMap["type"])
+	}
+}
+
+func TestSetItemsTool_Basic(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items": []any{
+			map[string]any{"level": "INFO", "msg": "server started"},
+			map[string]any{"level": "ERROR", "msg": "disk full"},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+	m := resultMap(t, result)
+	if m["ok"] != true {
+		t.Errorf("expected ok:true, got %v", m)
+	}
+
+	// Query to verify expanded children.
+	qResult := e.call(t, "query", map[string]any{
+		"ids": []any{"log-list"},
+	})
+	qm := resultMap(t, qResult)
+	results := qm["results"].(map[string]any)
+	listNode := results["log-list"].(map[string]any)
+	childIDs := listNode["child_ids"].([]any)
+	if len(childIDs) != 2 {
+		t.Fatalf("expected 2 children, got %d: %v", len(childIDs), childIDs)
+	}
+
+	// Verify first expanded node has correct content.
+	q2 := e.call(t, "query", map[string]any{"ids": []any{"log-list-0-0"}})
+	q2m := resultMap(t, q2)
+	r2 := q2m["results"].(map[string]any)
+	textNode := r2["log-list-0-0"].(map[string]any)
+	props := textNode["props"].(map[string]any)
+	if props["content"] != "INFO" {
+		t.Errorf("content = %v, want INFO", props["content"])
+	}
+}
+
+func TestSetItemsTool_ReplacesExisting(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	// First set.
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "first"}},
+	})
+
+	// Second set replaces.
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items": []any{
+			map[string]any{"level": "ERROR", "msg": "second"},
+			map[string]any{"level": "WARN", "msg": "third"},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+
+	list := e.server.Tree().Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+}
+
+func TestSetItemsTool_MissingTarget(t *testing.T) {
+	e := setupWithTemplate(t)
+	result := e.call(t, "set_items", map[string]any{
+		"target": "nonexistent",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+	})
+	if !result.IsError {
+		t.Error("expected error for missing target")
+	}
+}
+
+func TestSetItemsTool_NoTemplate(t *testing.T) {
+	e := setupWithTemplate(t)
+	result := e.call(t, "set_items", map[string]any{
+		"target": "header",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+	})
+	if !result.IsError {
+		t.Error("expected error for node without item_template")
+	}
+}
+
+func TestAppendItemsTool_Basic(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	// Set initial items.
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "initial"}},
+	})
+
+	// Append more.
+	result := e.call(t, "append_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "ERROR", "msg": "appended"}},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+
+	list := e.server.Tree().Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+
+	// Verify second item is the appended one.
+	q := e.call(t, "query", map[string]any{"ids": []any{"log-list-1-1"}})
+	qm := resultMap(t, q)
+	results := qm["results"].(map[string]any)
+	node := results["log-list-1-1"].(map[string]any)
+	props := node["props"].(map[string]any)
+	if props["content"] != "appended" {
+		t.Errorf("content = %v, want appended", props["content"])
+	}
+}
+
+func TestRemoveItemsTool_Basic(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items": []any{
+			map[string]any{"key": "a", "level": "INFO", "msg": "keep"},
+			map[string]any{"key": "b", "level": "ERROR", "msg": "remove"},
+			map[string]any{"key": "c", "level": "WARN", "msg": "keep"},
+		},
+	})
+
+	result := e.call(t, "remove_items", map[string]any{
+		"target": "log-list",
+		"keys":   []any{"b"},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+
+	list := e.server.Tree().Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+	if e.server.Tree().Find("log-list-b") != nil {
+		t.Error("log-list-b should be removed")
+	}
+}
+
+func TestSetItems_FiresMutationCallback(t *testing.T) {
+	e := setupWithTemplate(t)
+	calls := 0
+	e.server.SetOnMutation(func() { calls++ })
+
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+	})
+
+	if calls != 1 {
+		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+}
+
+func TestAppendItems_FiresMutationCallback(t *testing.T) {
+	e := setupWithTemplate(t)
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+	})
+
+	calls := 0
+	e.server.SetOnMutation(func() { calls++ })
+
+	e.call(t, "append_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "WARN", "msg": "y"}},
+	})
+
+	if calls != 1 {
+		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+}
+
+func TestRemoveItems_FiresMutationCallback(t *testing.T) {
+	e := setupWithTemplate(t)
+	e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"key": "x", "level": "INFO", "msg": "x"}},
+	})
+
+	calls := 0
+	e.server.SetOnMutation(func() { calls++ })
+
+	e.call(t, "remove_items", map[string]any{
+		"target": "log-list",
+		"keys":   []any{"x"},
+	})
+
+	if calls != 1 {
+		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+}
+
+func TestNewToolsDuringShutdown(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Shutdown()
+
+	tools := []struct {
+		name string
+		args map[string]any
+	}{
+		{"layout", map[string]any{"tree": map[string]any{"id": "r", "type": "container"}}},
+		{"set_items", map[string]any{"target": "x", "items": []any{}}},
+		{"append_items", map[string]any{"target": "x", "items": []any{}}},
+		{"remove_items", map[string]any{"target": "x", "keys": []any{}}},
+	}
+
+	for _, tt := range tools {
+		t.Run(tt.name, func(t *testing.T) {
+			result := callHandlerDirect(t, s, tt.name, tt.args)
+			if !result.IsError {
+				t.Errorf("expected error during shutdown for %s", tt.name)
+			}
+			text := resultText(t, result)
+			if !strings.Contains(text, "shutting down") {
+				t.Errorf("error should mention shutting down: %s", text)
+			}
+		})
+	}
+}
+
+// --- describe_widgets tests ---
+
+func TestDescribeWidgets_All(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_widgets", map[string]any{})
+	text := resultText(t, result)
+
+	// Should include known widget types.
+	for _, wtype := range []string{"list", "table", "button", "input", "container", "text"} {
+		if !strings.Contains(text, wtype) {
+			t.Errorf("catalog missing widget type %q", wtype)
+		}
+	}
+}
+
+func TestDescribeWidgets_SingleType(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "list"})
+	text := resultText(t, result)
+
+	if !strings.Contains(text, "Navigable item list") {
+		t.Errorf("expected list description, got: %s", text)
+	}
+	if !strings.Contains(text, "select") {
+		t.Errorf("expected select event in list info, got: %s", text)
+	}
+}
+
+func TestDescribeWidgets_UnknownType(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "nonexistent"})
+	if !result.IsError {
+		t.Error("expected error for unknown widget type")
+	}
+}
+
+// --- describe_scripting tests ---
+
+func TestDescribeScripting_ReturnsHooks(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
+	text := resultText(t, result)
+
+	for _, hook := range []string{"on_mount", "on_change", "on_event", "on_focus", "on_blur", "on_key"} {
+		if !strings.Contains(text, hook) {
+			t.Errorf("missing hook %q in describe_scripting response", hook)
+		}
+	}
+}
+
+func TestDescribeScripting_ReturnsDollarAPI(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
+	text := resultText(t, result)
+
+	for _, api := range []string{"$.value", "$.props", "$('id')"} {
+		if !strings.Contains(text, api) {
+			t.Errorf("missing $ API entry %q in describe_scripting response", api)
+		}
+	}
+}
+
+func TestDescribeScripting_ReturnsGlobals(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
+	text := resultText(t, result)
+
+	for _, global := range []string{"emit", "state", "event", "debug"} {
+		if !strings.Contains(text, global) {
+			t.Errorf("missing global %q in describe_scripting response", global)
+		}
+	}
+}
+
+func TestDescribeScripting_ReturnsSandboxInfo(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
+	text := resultText(t, result)
+
+	if !strings.Contains(text, "sandbox") {
+		t.Error("missing sandbox section in describe_scripting response")
+	}
+	if !strings.Contains(text, "require") {
+		t.Error("sandbox should mention blocked 'require'")
+	}
 }

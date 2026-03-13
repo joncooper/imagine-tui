@@ -14,6 +14,7 @@ type DiffWidget struct {
 	mode         string // "unified" or "split"
 	currentHunk  int
 	scrollOffset int
+	vp           viewport
 }
 
 type diffHunk struct {
@@ -206,6 +207,12 @@ func (w *DiffWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) st
 			line := w.renderDiffLine(l, ctx)
 			lines = append(lines, line)
 		}
+	}
+
+	// Viewport clipping.
+	if ctx.Height > 0 && len(lines) > ctx.Height {
+		vs := w.vp.slice(len(lines), ctx.Height, w.scrollOffset)
+		lines = lines[vs.Start:vs.End]
 	}
 
 	return strings.Join(lines, "\n")

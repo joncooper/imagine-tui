@@ -98,7 +98,7 @@ func TestTree_Sync_PreservesExistingInstances(t *testing.T) {
 	}
 }
 
-func TestTree_Sync_UnregisteredType(t *testing.T) {
+func TestTree_Sync_UnregisteredType_SkipsAndContinues(t *testing.T) {
 	r := NewRegistry()
 	// Only register container, not text or button.
 	r.Register(dom.TypeContainer, func() Widget { return &stubWidget{} })
@@ -106,9 +106,22 @@ func TestTree_Sync_UnregisteredType(t *testing.T) {
 	wt := NewTree(r)
 	tree := makeTestTree(t)
 
+	// Sync should succeed (skipping unknown types) rather than aborting.
 	err := wt.Sync(tree)
-	if err == nil {
-		t.Fatal("expected error for unregistered node type")
+	if err != nil {
+		t.Fatalf("Sync should skip unknown types, got error: %v", err)
+	}
+
+	// Container (root) should have a widget instance.
+	if wt.Get("root") == nil {
+		t.Error("expected widget instance for root (registered type)")
+	}
+	// text and button nodes should be skipped — no widget instance.
+	if wt.Get("c1") != nil {
+		t.Error("expected nil widget for c1 (unregistered type)")
+	}
+	if wt.Get("c2") != nil {
+		t.Error("expected nil widget for c2 (unregistered type)")
 	}
 }
 

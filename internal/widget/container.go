@@ -33,21 +33,25 @@ func (w *ContainerWidget) Layout(node *dom.Node, ctx ViewContext) []ChildConstra
 	available := ctx.Width - 2*padding
 	available -= borderWidth(PropString(node, "border", "none"))
 
+	availableHeight := ctx.Height - 2*padding
+	availableHeight -= borderHeight(PropString(node, "border", "none"))
+
 	if direction == "vertical" {
-		return w.layoutVertical(node, available)
+		return w.layoutVertical(node, available, availableHeight)
 	}
-	return w.layoutHorizontal(node, available, gap)
+	return w.layoutHorizontal(node, available, availableHeight, gap)
 }
 
-func (w *ContainerWidget) layoutVertical(node *dom.Node, available int) []ChildConstraint {
+func (w *ContainerWidget) layoutVertical(node *dom.Node, available, height int) []ChildConstraint {
 	constraints := make([]ChildConstraint, len(node.Children))
 	for i := range constraints {
 		constraints[i].Width = available
+		constraints[i].Height = height
 	}
 	return constraints
 }
 
-func (w *ContainerWidget) layoutHorizontal(node *dom.Node, available, gap int) []ChildConstraint {
+func (w *ContainerWidget) layoutHorizontal(node *dom.Node, available, height, gap int) []ChildConstraint {
 	n := len(node.Children)
 	totalGap := gap * (n - 1)
 	usable := available - totalGap
@@ -126,6 +130,11 @@ func (w *ContainerWidget) layoutHorizontal(node *dom.Node, available, gap int) [
 				constraints[i].Width = each
 			}
 		}
+	}
+
+	// All horizontal children share the same height.
+	for i := range constraints {
+		constraints[i].Height = height
 	}
 
 	return constraints
@@ -245,4 +254,20 @@ func borderWidth(name string) int {
 	left := len([]rune(b.Left))
 	right := len([]rune(b.Right))
 	return left + right
+}
+
+// borderHeight returns the total vertical height consumed by a border style.
+func borderHeight(name string) int {
+	b := resolveBorder(name)
+	if b == nil {
+		return 0
+	}
+	h := 0
+	if b.Top != "" {
+		h++
+	}
+	if b.Bottom != "" {
+		h++
+	}
+	return h
 }

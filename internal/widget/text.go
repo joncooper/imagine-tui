@@ -35,7 +35,10 @@ func (w *TextWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) st
 		return w.renderSegments(segments, ctx)
 	}
 
-	text := PropString(node, "text", "")
+	text := PropString(node, "content", "")
+	if text == "" {
+		text = PropString(node, "text", "")
+	}
 	styleStr := PropString(node, "style", "")
 	wrap := PropBool(node, "wrap", true)
 	maxLines := PropInt(node, "max_lines", 0)

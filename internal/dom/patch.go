@@ -14,6 +14,7 @@ const (
 	OpInsert OpType = "insert"
 	OpRemove OpType = "remove"
 	OpMove   OpType = "move"
+	OpAppend OpType = "append"
 )
 
 // PatchOp represents a single patch operation.
@@ -25,8 +26,10 @@ type PatchOp struct {
 	Props    map[string]any    `json:"props,omitempty"`     // for update and insert
 	Scripts  map[string]string `json:"scripts,omitempty"`
 	Computed map[string]string `json:"computed,omitempty"`
-	NodeType NodeType          `json:"type,omitempty"` // for insert
-	Node     *NodeSpec         `json:"node,omitempty"` // full node spec for insert (alternative to flat fields)
+	NodeType NodeType          `json:"type,omitempty"`   // for insert
+	Node     *NodeSpec         `json:"node,omitempty"`   // full node spec for insert (alternative to flat fields)
+	Prop     string            `json:"prop,omitempty"`   // for append: which prop to append to
+	Values   []any             `json:"values,omitempty"` // for append: values to append
 }
 
 // NodeSpec is a JSON-friendly node specification for insert operations.
@@ -71,6 +74,8 @@ func (t *Tree) Patch(ops []PatchOp) error {
 			err = t.applyRemove(op)
 		case OpMove:
 			err = t.applyMove(op)
+		case OpAppend:
+			err = t.applyAppend(op)
 		default:
 			err = fmt.Errorf("unknown op type %q", op.Op)
 		}
@@ -162,6 +167,34 @@ func (t *Tree) applyMove(op PatchOp) error {
 		return fmt.Errorf("move node %q: parent_id is required", op.ID)
 	}
 	return t.Move(op.ID, op.ParentID, op.AfterID)
+}
+
+func (t *Tree) applyAppend(op PatchOp) error {
+	if op.ID == "" {
+		return fmt.Errorf("append: node ID is required")
+	}
+	if op.Prop == "" {
+		return fmt.Errorf("append node %q: prop name is required", op.ID)
+	}
+	node := t.Find(op.ID)
+	if node == nil {
+		return fmt.Errorf("append: node %q not found", op.ID)
+	}
+	if len(op.Values) == 0 {
+		return nil
+	}
+	existing, ok := node.GetProp(op.Prop)
+	if !ok {
+		// Create new array prop.
+		node.SetProp(op.Prop, op.Values)
+		return nil
+	}
+	arr, ok := existing.([]any)
+	if !ok {
+		return fmt.Errorf("append node %q: prop %q is not an array", op.ID, op.Prop)
+	}
+	node.SetProp(op.Prop, append(arr, op.Values...))
+	return nil
 }
 
 // snapshot creates a deep copy of the tree for rollback.

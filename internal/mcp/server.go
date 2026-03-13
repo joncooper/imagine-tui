@@ -8,10 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/joncooper/imagine-tui/internal/dom"
+	"github.com/joncooper/imagine-tui/internal/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -20,14 +23,65 @@ type ToolHandler = func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolRes
 
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
 type Server struct {
-	mu       sync.RWMutex
-	tree     *dom.Tree
-	events   *dom.EventQueue
-	snaps    *dom.SnapshotStore
-	srv      *mcp.Server
-	handlers map[string]ToolHandler // tool name -> handler, for direct invocation
-	shutdown chan struct{}
+	mu         sync.RWMutex
+	tree       *dom.Tree
+	events     *dom.EventQueue
+	snaps      *dom.SnapshotStore
+	srv        *mcp.Server
+	handlers   map[string]ToolHandler // tool name -> handler, for direct invocation
+	shutdown   chan struct{}
+	onMutation func() // called after DOM-mutating operations (patch, replace, restore)
+	logger     *slog.Logger
 }
+
+// SetLogger sets the structured logger for the server.
+func (s *Server) SetLogger(l *slog.Logger) {
+	s.logger = l
+}
+
+// SetOnMutation registers a callback that fires after successful DOM mutations.
+// Used to notify BubbleTea of DOM changes so it can re-render.
+func (s *Server) SetOnMutation(fn func()) {
+	s.onMutation = fn
+}
+
+// notifyMutation calls the mutation callback if one is registered.
+func (s *Server) notifyMutation() {
+	if s.onMutation != nil {
+		s.onMutation()
+	}
+}
+
+// serverInstructions is sent to clients during MCP initialization.
+// This is the primary way the LLM learns how to use imagine-tui — no CLAUDE.md required.
+const serverInstructions = `imagine-tui is an MCP server that renders interactive terminal UIs.
+
+## Getting started
+1. Call describe_widgets to discover available widget types, their props, and events.
+2. Call layout to define your UI structure as a tree of widgets.
+3. Call set_items to populate list or table widgets with data.
+4. Call await_event to wait for user interaction, then respond by updating the UI.
+
+## Key tools
+- describe_widgets: Discover widget types (call this first!)
+- describe_scripting: Learn the reactive scripting system (hooks, $ API, computed props, emit)
+- layout: Define UI structure (container, text, list, table, button, input, etc.)
+- set_items / append_items / remove_items: Efficiently populate list, table, and log widgets with data
+- patch: Incremental DOM updates (update props, insert/remove nodes)
+- await_event: Long-poll for user events (click, select, submit, change)
+- query: Read current node state
+- snapshot / restore: Save and restore UI checkpoints
+
+## Widget overview
+Widgets include: container (layout), text, list (navigable with up/down/enter),
+table (sortable, expandable rows), button, input, textarea, select, code, log, diff.
+Call describe_widgets for full details on any widget type.
+
+## Data pattern
+For data-heavy UIs, use layout + set_items instead of generating large JSON patches.
+Define the structure once with layout, then send compact data arrays with set_items.
+For log widgets, use append_items to add new lines without resending the entire array.
+This is 10-20x fewer tokens than raw DOM manipulation.`
 
 // NewServer creates a new MCP server with all tool declarations registered.
 // It initializes a minimal DOM tree with a single root container node.
@@ -47,12 +101,15 @@ func NewServer() (*Server, error) {
 		snaps:    dom.NewSnapshotStore(),
 		handlers: make(map[string]ToolHandler),
 		shutdown: make(chan struct{}),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	s.srv = mcp.NewServer(&mcp.Implementation{
 		Name:    "imagine-tui",
 		Version: "0.1.0",
-	}, nil)
+	}, &mcp.ServerOptions{
+		Instructions: serverInstructions,
+	})
 
 	s.registerTools()
 	return s, nil
@@ -136,6 +193,20 @@ type queryInput struct {
 	IDs []string `json:"ids"`
 }
 
+type layoutInput struct {
+	Tree json.RawMessage `json:"tree"`
+}
+
+type setItemsInput struct {
+	Target string          `json:"target"`
+	Items  json.RawMessage `json:"items"`
+}
+
+type removeItemsInput struct {
+	Target string          `json:"target"`
+	Keys   json.RawMessage `json:"keys"`
+}
+
 // CallTool invokes a tool handler directly by name. Useful for integration
 // testing without going through the full MCP transport.
 func (s *Server) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
@@ -168,6 +239,12 @@ func (s *Server) registerTools() {
 	s.addTool(snapshotTool(), s.handleSnapshot)
 	s.addTool(restoreTool(), s.handleRestore)
 	s.addTool(queryTool(), s.handleQuery)
+	s.addTool(layoutTool(), s.handleLayout)
+	s.addTool(setItemsTool(), s.handleSetItems)
+	s.addTool(appendItemsTool(), s.handleAppendItems)
+	s.addTool(removeItemsTool(), s.handleRemoveItems)
+	s.addTool(describeWidgetsTool(), s.handleDescribeWidgets)
+	s.addTool(describeScriptingTool(), s.handleDescribeScripting)
 }
 
 func (s *Server) addTool(tool *mcp.Tool, handler ToolHandler) {
@@ -178,9 +255,9 @@ func (s *Server) addTool(tool *mcp.Tool, handler ToolHandler) {
 func patchTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "patch",
-		Description: "Apply an ordered list of atomic operations to the TUI DOM tree",
+		Description: "Apply an ordered list of atomic operations to the TUI DOM tree. Supported ops: update, insert, remove, move, append.",
 		InputSchema: inputSchema(
-			prop("ops", "array", "Ordered list of patch operations (update, insert, remove, move)"),
+			prop("ops", "array", "Ordered list of patch operations (update, insert, remove, move, append). Append op: {op: \"append\", id: \"node-id\", prop: \"lines\", values: [...]}"),
 			"ops",
 		),
 	}
@@ -299,13 +376,19 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult(fmt.Sprintf("invalid ops: %v", err)), nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.logger.Info("patch", "op_count", len(ops))
 
-	if err := s.tree.Patch(ops); err != nil {
+	s.mu.Lock()
+	err = s.tree.Patch(ops)
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Error("patch: failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 
+	s.logger.Info("patch: success")
+	s.notifyMutation()
 	return jsonResult(map[string]any{"ok": true})
 }
 
@@ -320,35 +403,52 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if input.TargetID == "" {
 		// Whole-tree replacement.
 		if len(input.Tree) == 0 {
+			s.mu.Unlock()
 			return errResult("replace requires either target_id or tree"), nil
 		}
 		var spec dom.NodeSpec
 		if err := json.Unmarshal(input.Tree, &spec); err != nil {
+			s.mu.Unlock()
+			s.logger.Error("replace: invalid tree spec", "error", err)
 			return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
 		}
+		childCount := len(spec.Children)
+		s.logger.Info("replace: whole tree", "root_id", spec.ID, "root_type", spec.Type, "children", childCount)
 		if err := s.tree.ReplaceTree(&spec); err != nil {
+			s.mu.Unlock()
+			s.logger.Error("replace: ReplaceTree failed", "error", err)
 			return errResult(err.Error()), nil
 		}
-		return jsonResult(map[string]any{"ok": true})
+		nodeCount := 0
+		s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
+		summary := s.tree.Summary()
+		s.mu.Unlock()
+		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
+		s.notifyMutation()
+		return jsonResult(map[string]any{"ok": true, "node_count": nodeCount})
 	}
 
 	// Subtree replacement.
 	if len(input.Children) == 0 {
+		s.mu.Unlock()
 		return errResult("replace with target_id requires children"), nil
 	}
 	var specs []*dom.NodeSpec
 	if err := json.Unmarshal(input.Children, &specs); err != nil {
+		s.mu.Unlock()
 		return errResult(fmt.Sprintf("invalid children: %v", err)), nil
 	}
 	if err := s.tree.Replace(input.TargetID, specs); err != nil {
+		s.mu.Unlock()
 		return errResult(err.Error()), nil
 	}
+	s.mu.Unlock()
 
+	s.notifyMutation()
 	return jsonResult(map[string]any{"ok": true})
 }
 
@@ -431,12 +531,14 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	err := s.snaps.Restore(input.Name, s.tree)
+	s.mu.Unlock()
 
-	if err := s.snaps.Restore(input.Name, s.tree); err != nil {
+	if err != nil {
 		return errResult(err.Error()), nil
 	}
 
+	s.notifyMutation()
 	return jsonResult(map[string]any{"ok": true, "restored": input.Name})
 }
 
@@ -453,6 +555,8 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult("missing required parameter: ids"), nil
 	}
 
+	s.logger.Info("query", "ids", input.IDs, "tree_summary", s.tree.Summary())
+
 	s.mu.Lock()
 	results, errs := s.tree.Query(input.IDs)
 	s.mu.Unlock()
@@ -466,9 +570,344 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 			errStrs[i] = e.Error()
 		}
 		resp["errors"] = errStrs
+		s.logger.Warn("query: some IDs not found", "errors", errStrs)
 	}
 
 	return jsonResult(resp)
+}
+
+// --- Template-driven data tools ---
+
+func layoutTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "layout",
+		Description: "Define or replace the UI structure. Container nodes may include an item_template prop for use with set_items/append_items. Idempotent.",
+		InputSchema: inputSchema(
+			prop("tree", "object", "Full tree spec. Container nodes may include an item_template prop with {{key}} placeholders."),
+			"tree",
+		),
+	}
+}
+
+func setItemsTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "set_items",
+		Description: "Populate a list, table, log, or templated container with data. For list nodes: items are {id, label, badge, style}. For table nodes: items are row objects. For log nodes: items are {text, level, timestamp}. For containers with item_template: items are expanded through the template. Replaces all existing items.",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("target", "string", "ID of the list node or container with item_template"),
+				prop("items", "array", "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders."),
+			),
+			"target", "items",
+		),
+	}
+}
+
+func appendItemsTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "append_items",
+		Description: "Append data items to a list, table, log, or templated container without replacing existing items.",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("target", "string", "ID of the list node or container with item_template"),
+				prop("items", "array", "Array of data objects to append"),
+			),
+			"target", "items",
+		),
+	}
+}
+
+func removeItemsTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "remove_items",
+		Description: "Remove items from a list, table, log, or templated container. For list/table/log nodes: keys match item id fields. For containers: keys compute child IDs as {target}-{key}.",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("target", "string", "ID of the list node or container"),
+				prop("keys", "array", "Array of item keys to remove"),
+			),
+			"target", "keys",
+		),
+	}
+}
+
+func describeWidgetsTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "describe_widgets",
+		Description: "List available widget types with their props, events, and capabilities. Call this before building a UI to discover what widgets you can use. Optionally filter by type.",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("type", "string", "Optional: filter to a specific widget type (e.g. \"list\", \"table\")"),
+			),
+		),
+	}
+}
+
+type describeWidgetsInput struct {
+	Type string `json:"type"`
+}
+
+func (s *Server) handleDescribeWidgets(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input describeWidgetsInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+
+	if input.Type != "" {
+		catalog := widget.CatalogMap()
+		info, ok := catalog[input.Type]
+		if !ok {
+			return errResult(fmt.Sprintf("unknown widget type %q", input.Type)), nil
+		}
+		return jsonResult(info)
+	}
+
+	return jsonResult(widget.Catalog())
+}
+
+func describeScriptingTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "describe_scripting",
+		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, and state. Call this to learn how to add client-side logic to widgets.",
+		InputSchema: inputSchema(nil),
+	}
+}
+
+// scriptingInfo is the static response for describe_scripting.
+type scriptingInfo struct {
+	Overview  string       `json:"overview"`
+	Hooks     []hookInfo   `json:"hooks"`
+	DollarAPI []apiEntry   `json:"dollar_api"`
+	Globals   []apiEntry   `json:"globals"`
+	Computed  computedInfo `json:"computed_props"`
+	Sandbox   sandboxInfo  `json:"sandbox"`
+	Examples  []example    `json:"examples"`
+}
+
+type hookInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type apiEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReadOnly    bool   `json:"read_only,omitempty"`
+}
+
+type computedInfo struct {
+	Description string `json:"description"`
+	Declaration string `json:"declaration"`
+}
+
+type sandboxInfo struct {
+	Description string   `json:"description"`
+	Blocked     []string `json:"blocked"`
+}
+
+type example struct {
+	Title string `json:"title"`
+	Code  string `json:"code"`
+}
+
+func scriptingCatalog() *scriptingInfo {
+	return &scriptingInfo{
+		Overview: "Every DOM node can have JavaScript hooks and computed props. Scripts run in a sandboxed goja (ES5.1) VM. The only way to communicate outside the sandbox is via emit().",
+		Hooks: []hookInfo{
+			{Name: "on_mount", Description: "Runs once when the node enters the DOM"},
+			{Name: "on_change", Description: "Runs when the node's value prop changes (inputs, selects)"},
+			{Name: "on_event", Description: "Runs when a child node emits an event (bubbles up)"},
+			{Name: "on_focus", Description: "Runs when the node receives focus"},
+			{Name: "on_blur", Description: "Runs when the node loses focus"},
+			{Name: "on_key", Description: "Runs on keypress when the node is focused"},
+		},
+		DollarAPI: []apiEntry{
+			{Name: "$", Description: "Current node proxy. Read/write props: $.value, $.text, $.style, $.visible, $.rows, $.props.{key}"},
+			{Name: "$.id", Description: "Node ID", ReadOnly: true},
+			{Name: "$.type", Description: "Node type", ReadOnly: true},
+			{Name: "$.value", Description: "The node's value (for inputs, textareas, selects)"},
+			{Name: "$.props", Description: "All props as an object — read or write individual keys"},
+			{Name: "$.style", Description: "Style token string"},
+			{Name: "$.text", Description: "Text content (alias for content prop)"},
+			{Name: "$.visible", Description: "Show/hide the node (bool)"},
+			{Name: "$.children", Description: "Child node proxies (read-only array)", ReadOnly: true},
+			{Name: "$.rows", Description: "Table rows array"},
+			{Name: "$('id')", Description: "Look up any node by ID and return a proxy with the same read/write API"},
+		},
+		Globals: []apiEntry{
+			{Name: "emit('local', patchOps)", Description: "Apply a DOM patch synchronously from within the script (no MCP round-trip)"},
+			{Name: "emit('claude', data)", Description: "Queue an event for the MCP client (delivered via await_event)"},
+			{Name: "state", Description: "Per-node persistent JavaScript object — survives across hook invocations"},
+			{Name: "event", Description: "The hook payload object (e.g., key info for on_key, value for on_change). Only defined during hook execution."},
+			{Name: "debug(...args)", Description: "Log to the server's debug output (not visible in TUI)"},
+		},
+		Computed: computedInfo{
+			Description: "Computed props are reactive expressions that auto-update when dependencies change. Declare them in the node's computed map. Dependencies are tracked automatically via $ access.",
+			Declaration: "In node spec: {\"computed\": {\"display_text\": \"return $.value.toUpperCase()\"}}",
+		},
+		Sandbox: sandboxInfo{
+			Description: "Scripts run in a locked-down ES5.1 sandbox. The only way to affect the outside world is via emit().",
+			Blocked:     []string{"require", "fetch", "XMLHttpRequest", "setTimeout", "setInterval", "console.log", "console.warn", "console.error"},
+		},
+		Examples: []example{
+			{
+				Title: "Computed prop: live character count",
+				Code:  `{"computed": {"char_count": "return 'Characters: ' + ($.value || '').length"}}`,
+			},
+			{
+				Title: "on_change hook: filter a list when input changes",
+				Code:  `{"scripts": {"on_change": "emit('claude', {action: 'filter', query: $.value})"}}`,
+			},
+		},
+	}
+}
+
+func (s *Server) handleDescribeScripting(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return jsonResult(scriptingCatalog())
+}
+
+func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.IsShutdown() {
+		return errResult("server is shutting down"), nil
+	}
+
+	var input layoutInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if len(input.Tree) == 0 {
+		return errResult("missing required parameter: tree"), nil
+	}
+
+	var spec dom.NodeSpec
+	if err := json.Unmarshal(input.Tree, &spec); err != nil {
+		s.logger.Error("layout: invalid tree spec", "error", err)
+		return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
+	}
+
+	s.logger.Info("layout", "root_id", spec.ID, "root_type", spec.Type, "children", len(spec.Children))
+
+	s.mu.Lock()
+	if err := s.tree.ReplaceTree(&spec); err != nil {
+		s.mu.Unlock()
+		s.logger.Error("layout: ReplaceTree failed", "error", err)
+		return errResult(err.Error()), nil
+	}
+	nodeCount := 0
+	s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
+	s.mu.Unlock()
+
+	s.logger.Info("layout: success", "node_count", nodeCount)
+	s.notifyMutation()
+	return jsonResult(map[string]any{"ok": true, "node_count": nodeCount})
+}
+
+func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.IsShutdown() {
+		return errResult("server is shutting down"), nil
+	}
+
+	var input setItemsInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if input.Target == "" {
+		return errResult("missing required parameter: target"), nil
+	}
+
+	var items []map[string]any
+	if len(input.Items) > 0 {
+		if err := json.Unmarshal(input.Items, &items); err != nil {
+			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
+		}
+	}
+
+	s.logger.Info("set_items", "target", input.Target, "item_count", len(items))
+
+	s.mu.Lock()
+	err := s.tree.SetItems(input.Target, items)
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Error("set_items: failed", "error", err)
+		return errResult(err.Error()), nil
+	}
+
+	s.logger.Info("set_items: success")
+	s.notifyMutation()
+	return jsonResult(map[string]any{"ok": true, "count": len(items)})
+}
+
+func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.IsShutdown() {
+		return errResult("server is shutting down"), nil
+	}
+
+	var input setItemsInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if input.Target == "" {
+		return errResult("missing required parameter: target"), nil
+	}
+
+	var items []map[string]any
+	if len(input.Items) > 0 {
+		if err := json.Unmarshal(input.Items, &items); err != nil {
+			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
+		}
+	}
+
+	s.logger.Info("append_items", "target", input.Target, "item_count", len(items))
+
+	s.mu.Lock()
+	err := s.tree.AppendItems(input.Target, items)
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Error("append_items: failed", "error", err)
+		return errResult(err.Error()), nil
+	}
+
+	s.logger.Info("append_items: success")
+	s.notifyMutation()
+	return jsonResult(map[string]any{"ok": true, "count": len(items)})
+}
+
+func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.IsShutdown() {
+		return errResult("server is shutting down"), nil
+	}
+
+	var input removeItemsInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if input.Target == "" {
+		return errResult("missing required parameter: target"), nil
+	}
+
+	var keys []string
+	if len(input.Keys) > 0 {
+		if err := json.Unmarshal(input.Keys, &keys); err != nil {
+			return errResult(fmt.Sprintf("invalid keys: %v", err)), nil
+		}
+	}
+
+	s.logger.Info("remove_items", "target", input.Target, "key_count", len(keys))
+
+	s.mu.Lock()
+	err := s.tree.RemoveItems(input.Target, keys)
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Error("remove_items: failed", "error", err)
+		return errResult(err.Error()), nil
+	}
+
+	s.logger.Info("remove_items: success")
+	s.notifyMutation()
+	return jsonResult(map[string]any{"ok": true, "removed": len(keys)})
 }
 
 // --- Helpers ---

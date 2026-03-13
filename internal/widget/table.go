@@ -16,6 +16,7 @@ type TableWidget struct {
 	sortColumn   string
 	sortAsc      bool
 	expandedRows map[int]bool
+	vp           viewport
 }
 
 type tableColumn struct {
@@ -169,8 +170,8 @@ func (w *TableWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) s
 	// Render separator.
 	sep := strings.Repeat("─", ctx.Width)
 
-	// Render rows.
-	var rowLines []string
+	// Render all rows.
+	var allRowLines []string
 	for rowIdx, row := range sortedRows {
 		rowStyle := lipgloss.NewStyle()
 		if rowStyler != nil {
@@ -185,7 +186,7 @@ func (w *TableWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) s
 			val := fmt.Sprintf("%v", row[col.Key])
 			cells[i] = rowStyle.Width(colWidths[i]).MaxWidth(colWidths[i]).Render(val)
 		}
-		rowLines = append(rowLines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
+		allRowLines = append(allRowLines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 
 		// Expanded detail.
 		if w.expandedRows[rowIdx] {
@@ -195,17 +196,52 @@ func (w *TableWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) s
 				if ctx.Theme != nil {
 					detailStyle = mergeStyles(detailStyle, ctx.Theme.Resolve("muted"))
 				}
-				rowLines = append(rowLines, detailStyle.Render(detail))
+				allRowLines = append(allRowLines, detailStyle.Render(detail))
 			}
 		}
 	}
 
+	// Viewport scrolling for rows.
+	fixedLines := 2 // header + separator
+	vpHeight := ctx.Height - fixedLines
+	if vpHeight > 0 && len(allRowLines) > vpHeight {
+		hintLines := 0
+		if vpHeight > 2 {
+			hintLines = 2
+			vpHeight -= hintLines
+		}
+		vs := w.vp.slice(len(allRowLines), vpHeight, w.selectedRow)
+		visible := allRowLines[vs.Start:vs.End]
+
+		parts := []string{header, sep}
+		if vs.Above > 0 {
+			hint := scrollHint(vs.Above, true)
+			if ctx.Theme != nil {
+				hint = ctx.Theme.Resolve("muted").Render(hint)
+			}
+			parts = append(parts, hint)
+		} else if hintLines > 0 {
+			parts = append(parts, "")
+		}
+		parts = append(parts, visible...)
+		if vs.Below > 0 {
+			hint := scrollHint(vs.Below, false)
+			if ctx.Theme != nil {
+				hint = ctx.Theme.Resolve("muted").Render(hint)
+			}
+			parts = append(parts, hint)
+		} else if hintLines > 0 {
+			parts = append(parts, "")
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	}
+
 	parts := []string{header, sep}
-	parts = append(parts, rowLines...)
+	parts = append(parts, allRowLines...)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func (w *TableWidget) calcColumnWidths(cols []tableColumn, rows []map[string]any, totalWidth int) []int {
+func (w *TableWidget) calcColumnWidths(cols []tableColumn, _ []map[string]any, totalWidth int) []int {
 	n := len(cols)
 	if n == 0 {
 		return nil
@@ -238,7 +274,7 @@ func (w *TableWidget) calcColumnWidths(cols []tableColumn, rows []map[string]any
 	return widths
 }
 
-func (w *TableWidget) sortRows(rows []map[string]any, cols []tableColumn) []map[string]any {
+func (w *TableWidget) sortRows(rows []map[string]any, _ []tableColumn) []map[string]any {
 	if w.sortColumn == "" {
 		return rows
 	}
@@ -285,9 +321,4 @@ func (w *TableWidget) buildRowStyler(node *dom.Node, theme *Theme) rowStyleFunc 
 		}
 		return lipgloss.NewStyle()
 	}
-}
-
-func stringFromMap(m map[string]any, key string) string {
-	v, _ := m[key].(string)
-	return v
 }

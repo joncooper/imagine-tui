@@ -426,3 +426,693 @@ func TestTreeWalkSingleNode(t *testing.T) {
 		t.Errorf("walk on single node: %v", ids)
 	}
 }
+
+// --- Template-driven tree methods ---
+
+// makeTemplatedTree builds a tree with a container that has an item_template prop.
+func makeTemplatedTree(t *testing.T) *Tree {
+	t.Helper()
+	root, _ := NewNode("root", TypeContainer)
+	list, _ := NewNode("log-list", TypeContainer)
+	list.SetProp("item_template", map[string]any{
+		"type": "container",
+		"props": map[string]any{
+			"direction": "row",
+		},
+		"children": []any{
+			map[string]any{"type": "text", "props": map[string]any{"content": "{{level}}"}},
+			map[string]any{"type": "text", "props": map[string]any{"content": "{{msg}}"}},
+		},
+	})
+	root.Children = append(root.Children, list)
+	list.parent = root
+	tree, err := NewTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func TestTree_SetItems_Basic(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	items := []map[string]any{
+		{"level": "INFO", "msg": "started"},
+		{"level": "ERROR", "msg": "disk full"},
+	}
+
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+
+	list := tree.Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+
+	// Verify first item
+	row0 := list.Children[0]
+	if row0.ID != "log-list-0" {
+		t.Errorf("row0.ID = %q, want %q", row0.ID, "log-list-0")
+	}
+	if len(row0.Children) != 2 {
+		t.Fatalf("row0 children = %d, want 2", len(row0.Children))
+	}
+	if v, _ := row0.Children[0].GetProp("content"); v != "INFO" {
+		t.Errorf("row0.child[0].content = %v, want INFO", v)
+	}
+	if v, _ := row0.Children[1].GetProp("content"); v != "started" {
+		t.Errorf("row0.child[1].content = %v, want 'started'", v)
+	}
+
+	// Verify second item
+	row1 := list.Children[1]
+	if row1.ID != "log-list-1" {
+		t.Errorf("row1.ID = %q, want %q", row1.ID, "log-list-1")
+	}
+
+	// Verify all nodes are indexed
+	if tree.Find("log-list-0") == nil {
+		t.Error("log-list-0 not in index")
+	}
+	if tree.Find("log-list-0-0") == nil {
+		t.Error("log-list-0-0 not in index")
+	}
+}
+
+func TestTree_SetItems_ReplacesExisting(t *testing.T) {
+	tree := makeTemplatedTree(t)
+
+	// First set
+	if err := tree.SetItems("log-list", []map[string]any{
+		{"level": "INFO", "msg": "first"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second set replaces
+	if err := tree.SetItems("log-list", []map[string]any{
+		{"level": "ERROR", "msg": "second"},
+		{"level": "WARN", "msg": "third"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := tree.Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+	if v, _ := list.Children[0].Children[1].GetProp("content"); v != "second" {
+		t.Errorf("content = %v, want 'second'", v)
+	}
+
+	// Old nodes should be gone from index
+	// (the first set's node IDs are reused, but let's verify tree is correct)
+	if tree.Find("log-list-0") == nil {
+		t.Error("log-list-0 should exist from second set")
+	}
+}
+
+func TestTree_SetItems_MissingTarget(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	err := tree.SetItems("nonexistent", []map[string]any{{"k": "v"}})
+	if err == nil {
+		t.Fatal("expected error for missing target")
+	}
+}
+
+func TestTree_SetItems_NoTemplate(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.SetItems("a", []map[string]any{{"k": "v"}})
+	if err == nil {
+		t.Fatal("expected error for missing item_template")
+	}
+}
+
+func TestTree_SetItems_EmptyItems(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	// First add some items
+	if err := tree.SetItems("log-list", []map[string]any{
+		{"level": "INFO", "msg": "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Then clear with empty items
+	if err := tree.SetItems("log-list", nil); err != nil {
+		t.Fatal(err)
+	}
+	list := tree.Find("log-list")
+	if len(list.Children) != 0 {
+		t.Errorf("children = %d, want 0", len(list.Children))
+	}
+}
+
+func TestTree_SetItems_WithKeys(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	items := []map[string]any{
+		{"key": "err1", "level": "ERROR", "msg": "disk full"},
+		{"key": "err2", "level": "WARN", "msg": "retry"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+
+	if tree.Find("log-list-err1") == nil {
+		t.Error("log-list-err1 not in index")
+	}
+	if tree.Find("log-list-err2") == nil {
+		t.Error("log-list-err2 not in index")
+	}
+}
+
+func TestTree_AppendItems_Basic(t *testing.T) {
+	tree := makeTemplatedTree(t)
+
+	// Append to empty container
+	if err := tree.AppendItems("log-list", []map[string]any{
+		{"level": "INFO", "msg": "first"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := tree.Find("log-list")
+	if len(list.Children) != 1 {
+		t.Fatalf("children = %d, want 1", len(list.Children))
+	}
+
+	// Append more
+	if err := tree.AppendItems("log-list", []map[string]any{
+		{"level": "WARN", "msg": "second"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+
+	// First item still there
+	if v, _ := list.Children[0].Children[1].GetProp("content"); v != "first" {
+		t.Errorf("child[0] content = %v, want 'first'", v)
+	}
+	// Second item appended
+	if v, _ := list.Children[1].Children[1].GetProp("content"); v != "second" {
+		t.Errorf("child[1] content = %v, want 'second'", v)
+	}
+}
+
+func TestTree_AppendItems_ToExisting(t *testing.T) {
+	tree := makeTemplatedTree(t)
+
+	// Set initial items
+	if err := tree.SetItems("log-list", []map[string]any{
+		{"level": "INFO", "msg": "initial"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Append additional items
+	if err := tree.AppendItems("log-list", []map[string]any{
+		{"level": "ERROR", "msg": "appended"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := tree.Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+}
+
+func TestTree_RemoveItems_ByKey(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	items := []map[string]any{
+		{"key": "a", "level": "INFO", "msg": "keep"},
+		{"key": "b", "level": "ERROR", "msg": "remove"},
+		{"key": "c", "level": "WARN", "msg": "keep"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tree.RemoveItems("log-list", []string{"b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := tree.Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+	if tree.Find("log-list-b") != nil {
+		t.Error("log-list-b should have been removed")
+	}
+	if tree.Find("log-list-a") == nil {
+		t.Error("log-list-a should still exist")
+	}
+	if tree.Find("log-list-c") == nil {
+		t.Error("log-list-c should still exist")
+	}
+}
+
+func TestTree_RemoveItems_Nonexistent(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	if err := tree.SetItems("log-list", []map[string]any{
+		{"key": "a", "level": "INFO", "msg": "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := tree.RemoveItems("log-list", []string{"nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent key")
+	}
+}
+
+func TestTree_RemoveItems_MissingTarget(t *testing.T) {
+	tree := makeTemplatedTree(t)
+	err := tree.RemoveItems("nonexistent", []string{"a"})
+	if err == nil {
+		t.Fatal("expected error for missing target")
+	}
+}
+
+// makeListTree builds a tree with a list node for testing list-type set_items.
+func makeListTree(t *testing.T) *Tree {
+	t.Helper()
+	root, _ := NewNode("root", TypeContainer)
+	list, _ := NewNode("log-list", TypeList)
+	root.Children = append(root.Children, list)
+	list.parent = root
+
+	tree, err := NewTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func TestTree_SetItems_List_Basic(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "1", "label": "INFO: server started", "badge": "INFO"},
+		{"id": "2", "label": "ERROR: disk full", "badge": "ERROR"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	rawItems, ok := node.GetProp("items")
+	if !ok {
+		t.Fatal("items prop not set")
+	}
+	// Items should be stored as []any for PropMapSlice compatibility.
+	anySlice, ok := rawItems.([]any)
+	if !ok {
+		t.Fatalf("items prop is %T, want []any", rawItems)
+	}
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d items, want 2", len(anySlice))
+	}
+	first := anySlice[0].(map[string]any)
+	if first["label"] != "INFO: server started" {
+		t.Errorf("first label = %q, want %q", first["label"], "INFO: server started")
+	}
+}
+
+func TestTree_SetItems_List_ReplacesExisting(t *testing.T) {
+	tree := makeListTree(t)
+	items1 := []map[string]any{
+		{"id": "1", "label": "old item"},
+	}
+	if err := tree.SetItems("log-list", items1); err != nil {
+		t.Fatal(err)
+	}
+	items2 := []map[string]any{
+		{"id": "a", "label": "new item A"},
+		{"id": "b", "label": "new item B"},
+	}
+	if err := tree.SetItems("log-list", items2); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	anySlice := node.Props["items"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d items, want 2", len(anySlice))
+	}
+	if anySlice[0].(map[string]any)["label"] != "new item A" {
+		t.Error("first item not replaced")
+	}
+}
+
+func TestTree_SetItems_List_EmptyClears(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "1", "label": "item"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.SetItems("log-list", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	anySlice := node.Props["items"].([]any)
+	if len(anySlice) != 0 {
+		t.Fatalf("got %d items, want 0", len(anySlice))
+	}
+}
+
+func TestTree_AppendItems_List_Basic(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "1", "label": "first"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+	more := []map[string]any{
+		{"id": "2", "label": "second"},
+		{"id": "3", "label": "third"},
+	}
+	if err := tree.AppendItems("log-list", more); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	anySlice := node.Props["items"].([]any)
+	if len(anySlice) != 3 {
+		t.Fatalf("got %d items, want 3", len(anySlice))
+	}
+	if anySlice[2].(map[string]any)["label"] != "third" {
+		t.Error("third item not appended")
+	}
+}
+
+func TestTree_AppendItems_List_ToEmpty(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "1", "label": "first"},
+	}
+	if err := tree.AppendItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	anySlice := node.Props["items"].([]any)
+	if len(anySlice) != 1 {
+		t.Fatalf("got %d items, want 1", len(anySlice))
+	}
+}
+
+func TestTree_RemoveItems_List_ByID(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "a", "label": "alpha"},
+		{"id": "b", "label": "beta"},
+		{"id": "c", "label": "charlie"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.RemoveItems("log-list", []string{"b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("log-list")
+	anySlice := node.Props["items"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d items, want 2", len(anySlice))
+	}
+	// Remaining should be a and c.
+	if anySlice[0].(map[string]any)["id"] != "a" {
+		t.Error("expected first item to be 'a'")
+	}
+	if anySlice[1].(map[string]any)["id"] != "c" {
+		t.Error("expected second item to be 'c'")
+	}
+}
+
+func TestTree_RemoveItems_List_Nonexistent(t *testing.T) {
+	tree := makeListTree(t)
+	items := []map[string]any{
+		{"id": "a", "label": "alpha"},
+	}
+	if err := tree.SetItems("log-list", items); err != nil {
+		t.Fatal(err)
+	}
+	err := tree.RemoveItems("log-list", []string{"nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent key")
+	}
+}
+
+// --- Table-type set_items tests ---
+
+func makeTableTree(t *testing.T) *Tree {
+	t.Helper()
+	root, _ := NewNode("root", TypeContainer)
+	tbl, _ := NewNode("data-table", TypeTable)
+	root.Children = append(root.Children, tbl)
+	tbl.parent = root
+
+	tree, err := NewTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func TestTree_SetItems_Table_Basic(t *testing.T) {
+	tree := makeTableTree(t)
+	rows := []map[string]any{
+		{"name": "Alice", "age": 30},
+		{"name": "Bob", "age": 25},
+	}
+	if err := tree.SetItems("data-table", rows); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("data-table")
+	rawRows, ok := node.GetProp("rows")
+	if !ok {
+		t.Fatal("rows prop not set")
+	}
+	anySlice, ok := rawRows.([]any)
+	if !ok {
+		t.Fatalf("rows prop is %T, want []any", rawRows)
+	}
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d rows, want 2", len(anySlice))
+	}
+	first := anySlice[0].(map[string]any)
+	if first["name"] != "Alice" {
+		t.Errorf("first name = %v, want Alice", first["name"])
+	}
+}
+
+func TestTree_AppendItems_Table_Basic(t *testing.T) {
+	tree := makeTableTree(t)
+	if err := tree.SetItems("data-table", []map[string]any{
+		{"name": "Alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.AppendItems("data-table", []map[string]any{
+		{"name": "Bob"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("data-table")
+	anySlice := node.Props["rows"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d rows, want 2", len(anySlice))
+	}
+}
+
+func TestTree_RemoveItems_Table_ByID(t *testing.T) {
+	tree := makeTableTree(t)
+	if err := tree.SetItems("data-table", []map[string]any{
+		{"id": "a", "name": "Alice"},
+		{"id": "b", "name": "Bob"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.RemoveItems("data-table", []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("data-table")
+	anySlice := node.Props["rows"].([]any)
+	if len(anySlice) != 1 {
+		t.Fatalf("got %d rows, want 1", len(anySlice))
+	}
+	if anySlice[0].(map[string]any)["name"] != "Bob" {
+		t.Error("expected remaining row to be Bob")
+	}
+}
+
+// --- Log-type set_items tests ---
+
+func makeLogTree(t *testing.T) *Tree {
+	t.Helper()
+	root, _ := NewNode("root", TypeContainer)
+	logNode, _ := NewNode("mission-log", TypeLog)
+	root.Children = append(root.Children, logNode)
+	logNode.parent = root
+
+	tree, err := NewTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func TestTree_SetItems_Log_Basic(t *testing.T) {
+	tree := makeLogTree(t)
+	lines := []map[string]any{
+		{"id": "1", "text": "Engines nominal", "level": "info"},
+		{"id": "2", "text": "Fuel pressure low", "level": "warn"},
+	}
+	if err := tree.SetItems("mission-log", lines); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	rawLines, ok := node.GetProp("lines")
+	if !ok {
+		t.Fatal("lines prop not set")
+	}
+	anySlice, ok := rawLines.([]any)
+	if !ok {
+		t.Fatalf("lines prop is %T, want []any", rawLines)
+	}
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d lines, want 2", len(anySlice))
+	}
+	first := anySlice[0].(map[string]any)
+	if first["text"] != "Engines nominal" {
+		t.Errorf("first text = %q, want %q", first["text"], "Engines nominal")
+	}
+}
+
+func TestTree_SetItems_Log_ReplacesExisting(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "1", "text": "old line"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "a", "text": "new line A"},
+		{"id": "b", "text": "new line B"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	anySlice := node.Props["lines"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d lines, want 2", len(anySlice))
+	}
+	if anySlice[0].(map[string]any)["text"] != "new line A" {
+		t.Error("first line not replaced")
+	}
+}
+
+func TestTree_SetItems_Log_EmptyClears(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "1", "text": "line"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.SetItems("mission-log", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	anySlice := node.Props["lines"].([]any)
+	if len(anySlice) != 0 {
+		t.Fatalf("got %d lines, want 0", len(anySlice))
+	}
+}
+
+func TestTree_AppendItems_Log_Basic(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "1", "text": "first"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.AppendItems("mission-log", []map[string]any{
+		{"id": "2", "text": "second"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	anySlice := node.Props["lines"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d lines, want 2", len(anySlice))
+	}
+	if anySlice[1].(map[string]any)["text"] != "second" {
+		t.Error("second line not appended")
+	}
+}
+
+func TestTree_AppendItems_Log_ToEmpty(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.AppendItems("mission-log", []map[string]any{
+		{"id": "1", "text": "first"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	anySlice := node.Props["lines"].([]any)
+	if len(anySlice) != 1 {
+		t.Fatalf("got %d lines, want 1", len(anySlice))
+	}
+}
+
+func TestTree_RemoveItems_Log_ByID(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "a", "text": "alpha"},
+		{"id": "b", "text": "beta"},
+		{"id": "c", "text": "charlie"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.RemoveItems("mission-log", []string{"b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	node := tree.Find("mission-log")
+	anySlice := node.Props["lines"].([]any)
+	if len(anySlice) != 2 {
+		t.Fatalf("got %d lines, want 2", len(anySlice))
+	}
+	if anySlice[0].(map[string]any)["id"] != "a" {
+		t.Error("expected first item to be 'a'")
+	}
+	if anySlice[1].(map[string]any)["id"] != "c" {
+		t.Error("expected second item to be 'c'")
+	}
+}
+
+func TestTree_RemoveItems_Log_Nonexistent(t *testing.T) {
+	tree := makeLogTree(t)
+	if err := tree.SetItems("mission-log", []map[string]any{
+		{"id": "a", "text": "alpha"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := tree.RemoveItems("mission-log", []string{"nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent key")
+	}
+}

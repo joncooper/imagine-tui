@@ -86,3 +86,9 @@ func PropMapSlice(node *dom.Node, key string) []map[string]any {
 	}
 	return result
 }
+
+// stringFromMap extracts a string value from a map, returning "" if missing.
+func stringFromMap(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}

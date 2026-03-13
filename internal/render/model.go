@@ -397,20 +397,19 @@ func (m *Model) reconcileScriptTree() error {
 	return &script.Error{Hook: "on_mount", Message: "mount reconciliation exceeded iteration limit"}
 }
 
-func (m *Model) collectNodeOrder() ([]string, map[string]bool) {
+func (m *Model) collectNodeOrder() (order []string, live map[string]bool) {
 	tree := m.server.Tree()
 	if tree == nil {
 		return nil, nil
 	}
 
-	var order []string
-	live := make(map[string]bool)
+	live = make(map[string]bool)
 	tree.Walk(func(n *dom.Node) bool {
 		order = append(order, n.ID)
 		live[n.ID] = true
 		return true
 	})
-	return order, live
+	return
 }
 
 func (m *Model) hasHook(nodeID string, hook script.HookType) bool {
@@ -583,8 +582,8 @@ func overlayLine(base, overlay string, width int) string {
 	if startCol >= len(baseRunes) {
 		return string(baseRunes)
 	}
-	if max := len(baseRunes) - startCol; len(overlayRunes) > max {
-		overlayRunes = overlayRunes[:max]
+	if avail := len(baseRunes) - startCol; len(overlayRunes) > avail {
+		overlayRunes = overlayRunes[:avail]
 	}
 	copy(baseRunes[startCol:startCol+len(overlayRunes)], overlayRunes)
 	return string(baseRunes)

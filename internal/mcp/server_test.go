@@ -1981,10 +1981,10 @@ func TestToolsRejectBadUnmarshalArgs(t *testing.T) {
 		name string
 		args map[string]any
 	}{
-		{"patch", map[string]any{"ops": 42}},           // ops must be array
-		{"snapshot", map[string]any{"name": 42}},        // name must be string
-		{"restore", map[string]any{"name": 42}},         // name must be string
-		{"query", map[string]any{"ids": "not-array"}},   // ids must be array
+		{"patch", map[string]any{"ops": 42}},          // ops must be array
+		{"snapshot", map[string]any{"name": 42}},      // name must be string
+		{"restore", map[string]any{"name": 42}},       // name must be string
+		{"query", map[string]any{"ids": "not-array"}}, // ids must be array
 	}
 
 	for _, tc := range tools {

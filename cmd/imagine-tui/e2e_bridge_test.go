@@ -223,7 +223,7 @@ func TestConnectBridgeReconnectPreservesLiveUIState(t *testing.T) {
 	}
 }
 
-func startConnectBridgeSession(t *testing.T, parentCtx context.Context, socketPath string) *bridgeSession {
+func startConnectBridgeSession(t *testing.T, parentCtx context.Context, socketPath string) *bridgeSession { //nolint:revive // ctx after t is intentional for test helpers
 	t.Helper()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -256,7 +256,7 @@ type bridgeStartError struct {
 
 func (e *bridgeStartError) Error() string { return e.err.Error() }
 
-func tryStartConnectBridgeSession(t *testing.T, ctx context.Context, socketPath string) (*bridgeSession, error) {
+func tryStartConnectBridgeSession(t *testing.T, ctx context.Context, socketPath string) (*bridgeSession, error) { //nolint:revive // ctx after t is intentional for test helpers
 	t.Helper()
 
 	cmd := exec.Command(testBinaryPath(t), "connect", socketPath)
@@ -310,7 +310,7 @@ func (bs *bridgeSession) close(t *testing.T) {
 	}
 }
 
-func assertToolDiscovery(t *testing.T, ctx context.Context, sess *mcp.ClientSession) {
+func assertToolDiscovery(t *testing.T, ctx context.Context, sess *mcp.ClientSession) { //nolint:revive // ctx after t is intentional for test helpers
 	t.Helper()
 
 	tools, err := sess.ListTools(ctx, nil)

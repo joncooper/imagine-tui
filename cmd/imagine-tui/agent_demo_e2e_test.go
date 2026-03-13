@@ -524,7 +524,7 @@ func TestAgentIteratesOnMultiStepDemoScenarioOverBridge(t *testing.T) {
 	}
 }
 
-func mustCallTool(t *testing.T, ctx context.Context, sess *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
+func mustCallTool(t *testing.T, ctx context.Context, sess *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult { //nolint:revive // ctx after t is intentional for test helpers
 	t.Helper()
 
 	params := &mcp.CallToolParams{Name: name}

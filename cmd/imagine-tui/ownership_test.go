@@ -326,12 +326,12 @@ func TestServePTYEndToEndRendersAndAcceptsInput(t *testing.T) {
 	}
 }
 
-func startServePTY(t *testing.T) (string, *threadSafeBuffer, func()) {
+func startServePTY(t *testing.T) (string, *threadSafeBuffer, func()) { //nolint:gocritic // unnamed results are clearer here
 	socketPath, _, capture, cleanup := startServePTYTerminal(t)
 	return socketPath, capture, cleanup
 }
 
-func startServePTYTerminal(t *testing.T) (string, *os.File, *threadSafeBuffer, func()) {
+func startServePTYTerminal(t *testing.T) (string, *os.File, *threadSafeBuffer, func()) { //nolint:gocritic // unnamed results are clearer here
 	t.Helper()
 
 	tmpFile, err := os.CreateTemp("/tmp", "imtu-*.sock")

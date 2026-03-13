@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "imagine_tui": {
+      "command": "go",
+      "args": ["run", "./cmd/imagine-tui", "connect", "/tmp/imagine-tui.sock"]
+    }
+  }
+}

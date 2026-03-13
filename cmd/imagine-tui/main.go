@@ -285,9 +285,14 @@ func connectCmd(args []string) error {
 	}
 	socketPath := args[0]
 
+	// Check if the socket file exists before attempting to dial.
+	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		return fmt.Errorf("socket %s does not exist — start the server first: imagine-tui serve -socket %s", socketPath, socketPath)
+	}
+
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", socketPath, err)
+		return fmt.Errorf("dial %s: %w (is the server running?)", socketPath, err)
 	}
 	defer func() { _ = conn.Close() }()
 

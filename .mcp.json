@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "imagine_tui": {
-      "command": "/Users/jdc/conductor/workspaces/imagine-tui/casablanca-v1/imagine-tui",
-      "args": ["connect", "/tmp/imagine-tui-codex.sock"]
+      "command": "go",
+      "args": ["run", "./cmd/imagine-tui", "connect", "/tmp/imagine-tui.sock"]
     }
   }
 }

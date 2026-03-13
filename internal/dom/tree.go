@@ -98,7 +98,7 @@ func (t *Tree) Remove(id string) (*Node, error) {
 }
 
 // Move reparents a node under a new parent, optionally after a sibling.
-func (t *Tree) Move(id string, newParentID string, afterID string) error {
+func (t *Tree) Move(id, newParentID, afterID string) error {
 	node := t.Find(id)
 	if node == nil {
 		return fmt.Errorf("move: node %q not found", id)

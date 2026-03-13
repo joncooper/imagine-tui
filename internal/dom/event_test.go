@@ -247,7 +247,7 @@ func TestEventQueueContextCancel(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Error("expected error from cancelled context")
+			t.Error("expected error from canceled context")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("dequeue didn't return after cancel")

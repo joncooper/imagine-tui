@@ -56,7 +56,7 @@ func (q *EventQueue) Enqueue(evt *Event) {
 	}
 }
 
-// Dequeue blocks until an event is available, the context is cancelled, or the
+// Dequeue blocks until an event is available, the context is canceled, or the
 // queue is closed. Returns the event or an error.
 //
 // If opts.Filter is set, only events from those source IDs are returned.

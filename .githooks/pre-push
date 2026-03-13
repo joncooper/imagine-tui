@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensure GOBIN is on PATH (common when installed via go install)
+export PATH="${GOPATH:-$HOME/go}/bin:$PATH"
+
+echo "pre-push: running golangci-lint..."
+
+if ! command -v golangci-lint &>/dev/null; then
+  echo "error: golangci-lint not found in PATH"
+  echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.0"
+  exit 1
+fi
+
+golangci-lint run
+echo "pre-push: lint passed"

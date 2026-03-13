@@ -137,6 +137,44 @@ Design doc: [docs/demos/log-detective.md](demos/log-detective.md)
 
 Items not tied to a milestone. Will be scheduled as needed.
 
+### Container viewport & overflow scrolling
+- Add `height` / `max_height` props to containers (fixed int or percentage)
+- Add `overflow` prop: `"scroll"` wraps children in a bubbletea viewport
+- Without this, tall content pushes the entire screen down instead of scrolling within its panel
+- Discovered during live demo: log/narrative panels overflow their containers
+- **Implementation**: wrap container rendering in `viewport.Model` when `overflow: "scroll"` and height is constrained
+- **TDD**: golden file tests for constrained containers, overflow clipping
+
+### Flex layout & layout managers
+- Flex grow/shrink (one panel fills remaining space after siblings)
+- Min/max width constraints on containers
+- Wrapping grids (flow children into rows when they overflow)
+- Current `width: "50%"` and `direction` cover basics but can't express elastic layouts
+- **Implementation**: lipgloss `Place` + custom flex algorithm, or adopt a layout library
+- **TDD**: layout calculation unit tests for grow/shrink/wrap scenarios
+
+### Script runtime: state in computed props & cross-node state
+- Make `state` readable from computed props (currently only `$` props are accessible)
+- Add `$('other-node').state` for cross-node state sharing
+- Eliminates the hidden-input workaround for shared reactive state
+- Key enabler for client-side-heavy UIs (games, dashboards with complex local logic)
+- **TDD**: computed prop reads state, cross-node state access, reactivity triggers
+
+### Script runtime: timers (setTimeout/setInterval)
+- Sandboxed short-duration timers for animations and timed events
+- Combat damage flash, countdown timers, progress animations
+- Must integrate with bubbletea's `tea.Tick` command pattern
+- Safety: max duration cap, max concurrent timers, auto-cancel on node removal
+- **TDD**: timer fires, timer cancels on remove, max limits enforced
+
+### BubbleTea ecosystem widget integration
+- Progress bar widget (from `bubbles/progress`)
+- Spinner widget (from `bubbles/spinner`)
+- Markdown/glamour widget (from `glamour`)
+- Sparkline widget (needed for M7 living dashboard)
+- Each maps to a new widget type in the registry
+- **TDD**: golden file tests per new widget type
+
 ### TSX fragment runtime
 - Implement the JSX transform in the goja layer
 - Component registry: `<ListItem>`, `<Text>`, `<Container>` → DOM node specs
@@ -154,6 +192,13 @@ Items not tied to a milestone. Will be scheduled as needed.
 - MCP reconnection after disconnect
 - DOM consistency checks (orphaned nodes, dangling references)
 - **TDD**: every error path, every recovery mechanism
+
+### Dedicated agent-launched Ghostty sessions
+- Launch imagine-tui in a dedicated Ghostty window/tab for a single agent session
+- Treat the Ghostty process/window as the ownership and lifetime boundary
+- Closing the window terminates the session and prevents further control
+- Design socket ownership, launcher lifecycle, cleanup semantics, and any required session registry
+- Defer until shell-run single-owner reconnect and live scripting are stable
 
 ### Documentation & packaging
 - README with architecture overview, quickstart, demo walkthroughs

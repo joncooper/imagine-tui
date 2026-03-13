@@ -346,6 +346,9 @@ func mergeProps(props ...map[string]any) map[string]any {
 }
 
 func inputSchema(properties map[string]any, required ...string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
 	schema := map[string]any{
 		"type":       "object",
 		"properties": properties,

@@ -13,6 +13,7 @@ import (
 // CodeWidget implements a code block with line numbers and line highlighting.
 type CodeWidget struct {
 	scrollOffset int
+	vp           viewport
 }
 
 // Init implements Widget.
@@ -101,6 +102,12 @@ func (w *CodeWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) st
 		}
 
 		rendered = append(rendered, lineStr)
+	}
+
+	// Viewport clipping.
+	if ctx.Height > 0 && len(rendered) > ctx.Height {
+		vs := w.vp.slice(len(rendered), ctx.Height, w.scrollOffset)
+		rendered = rendered[vs.Start:vs.End]
 	}
 
 	return strings.Join(rendered, "\n")

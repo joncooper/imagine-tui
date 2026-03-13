@@ -1,6 +1,8 @@
 package render
 
 import (
+	"io"
+	"log/slog"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +17,7 @@ type Model struct {
 	server  *imcp.Server
 	widgets *widget.Tree
 	focus   *FocusRing
+	logger  *slog.Logger
 
 	focusedID    string
 	width        int
@@ -28,7 +31,14 @@ func NewModel(srv *imcp.Server, registry *widget.Registry) Model {
 		server:  srv,
 		widgets: widget.NewTree(registry),
 		focus:   &FocusRing{index: make(map[string]int)},
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+}
+
+// SetLogger sets the structured logger for the render model and its widget tree.
+func (m *Model) SetLogger(l *slog.Logger) {
+	m.logger = l
+	m.widgets.SetLogger(l)
 }
 
 // Init implements tea.Model. No startup command is needed.
@@ -40,27 +50,46 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.logger.Info("window resize", "width", msg.Width, "height", msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
 		m.syncState()
 		return m, nil
 
 	case tea.KeyMsg:
+		m.logger.Info("key", "type", msg.Type, "runes", string(msg.Runes),
+			"focused", m.focusedID, "disconnected", m.disconnected)
+		// Allow 'q' or Esc to quit when disconnected or no DOM loaded.
+		if m.disconnected || m.server.Tree() == nil {
+			if msg.Type == tea.KeyRunes && string(msg.Runes) == "q" || msg.Type == tea.KeyEsc {
+				m.server.Shutdown()
+				return m, tea.Quit
+			}
+		}
 		return m.handleKey(msg)
 
 	case DOMChangedMsg:
+		m.logger.Info("DOM changed, syncing state")
 		m.syncState()
 		// If focused node was removed, adjust focus.
 		if m.focusedID != "" && !m.focus.Contains(m.focusedID) {
 			m.focusedID = m.focus.Next("")
+			m.logger.Info("focus adjusted (removed node)", "new_focus", m.focusedID)
+		}
+		// Auto-focus first element if nothing is focused.
+		if m.focusedID == "" && len(m.focus.IDs) > 0 {
+			m.focusedID = m.focus.IDs[0]
+			m.logger.Info("auto-focus first element", "focused", m.focusedID)
 		}
 		return m, nil
 
 	case MCPDisconnectedMsg:
+		m.logger.Info("MCP disconnected", "error", msg.Err)
 		m.disconnected = true
 		return m, nil
 
 	case MCPConnectedMsg:
+		m.logger.Info("MCP connected")
 		m.disconnected = false
 		m.syncState()
 		return m, nil
@@ -76,6 +105,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View implements tea.Model. Renders the DOM tree via the widget tree.
 func (m Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
+		m.logger.Debug("view: zero dimensions", "width", m.width, "height", m.height)
 		return ""
 	}
 
@@ -85,15 +115,26 @@ func (m Model) View() string {
 
 	m.server.RLock()
 	defer m.server.RUnlock()
-	return m.widgets.Render(m.server.Tree(), m.width, m.height, m.focusedID)
+	tree := m.server.Tree()
+	m.logger.Debug("view: rendering", "root_children", len(tree.Root.Children),
+		"width", m.width, "height", m.height)
+	result := m.widgets.Render(tree, m.width, m.height, m.focusedID)
+	m.logger.Debug("view: done", "output_len", len(result))
+	return result
 }
 
 // syncState synchronizes the widget tree and focus ring with the current DOM.
 func (m *Model) syncState() {
 	m.server.RLock()
 	defer m.server.RUnlock()
-	_ = m.widgets.Sync(m.server.Tree())
-	m.focus = BuildFocusRing(m.server.Tree())
+	tree := m.server.Tree()
+	m.logger.Debug("syncState", "root_children", len(tree.Root.Children),
+		"tree_summary", tree.Summary())
+	if err := m.widgets.Sync(tree); err != nil {
+		m.logger.Error("syncState: widget sync failed", "error", err)
+	}
+	m.focus = BuildFocusRing(tree)
+	m.logger.Debug("focus ring built", "size", len(m.focus.IDs), "ids", m.focus.IDs)
 }
 
 // handleKey processes keyboard input. Acquires a read lock on the server to
@@ -111,10 +152,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyTab:
 			m.focusedID = m.focusTab(true)
+			m.logger.Info("tab focus", "new_focus", m.focusedID)
 			return m, nil
 
 		case tea.KeyShiftTab:
 			m.focusedID = m.focusTab(false)
+			m.logger.Info("shift-tab focus", "new_focus", m.focusedID)
 			return m, nil
 
 		default:

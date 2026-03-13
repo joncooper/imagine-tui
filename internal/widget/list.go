@@ -13,6 +13,7 @@ type ListWidget struct {
 	selectedIndex int
 	filterText    string
 	filtered      []int // indices into items
+	vp            viewport
 }
 
 type listItem struct {
@@ -155,7 +156,8 @@ func (w *ListWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) st
 
 	w.rebuildFilter(items)
 
-	var lines []string
+	// Build all item lines.
+	allLines := make([]string, 0, len(w.filtered))
 	for _, idx := range w.filtered {
 		if idx < 0 || idx >= len(items) {
 			continue
@@ -186,8 +188,52 @@ func (w *ListWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) st
 			style = style.Bold(true)
 		}
 
-		lines = append(lines, style.Render(label))
+		allLines = append(allLines, style.Render(label))
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	// Viewport scrolling: find the position of selectedIndex in filtered list.
+	filteredSelIdx := 0
+	for i, idx := range w.filtered {
+		if idx == w.selectedIndex {
+			filteredSelIdx = i
+			break
+		}
+	}
+
+	// Reserve lines for scroll hints.
+	vpHeight := ctx.Height
+	if vpHeight > 0 && len(allLines) > vpHeight {
+		// We may need 1-2 lines for hints, but only if items exceed viewport.
+		hintLines := 0
+		if vpHeight > 2 {
+			hintLines = 2 // reserve space for up/down hints
+			vpHeight -= hintLines
+		}
+		vs := w.vp.slice(len(allLines), vpHeight, filteredSelIdx)
+		visible := allLines[vs.Start:vs.End]
+
+		var parts []string
+		if vs.Above > 0 {
+			hint := scrollHint(vs.Above, true)
+			if ctx.Theme != nil {
+				hint = ctx.Theme.Resolve("muted").Render(hint)
+			}
+			parts = append(parts, hint)
+		} else if hintLines > 0 {
+			parts = append(parts, "") // blank line to keep alignment
+		}
+		parts = append(parts, visible...)
+		if vs.Below > 0 {
+			hint := scrollHint(vs.Below, false)
+			if ctx.Theme != nil {
+				hint = ctx.Theme.Resolve("muted").Render(hint)
+			}
+			parts = append(parts, hint)
+		} else if hintLines > 0 {
+			parts = append(parts, "")
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, allLines...)
 }

@@ -12,6 +12,7 @@ import (
 type LogWidget struct {
 	scrollOffset int
 	stickyBottom bool
+	vp           viewport
 }
 
 type logLine struct {
@@ -98,14 +99,20 @@ func (w *LogWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) str
 		lines = lines[len(lines)-maxLines:]
 	}
 
-	// Sticky-bottom: show last N lines.
+	// Sticky-bottom: follow the last line.
 	if w.stickyBottom {
-		w.scrollOffset = len(lines) // will be clamped by viewport
+		w.scrollOffset = len(lines) - 1
 	}
 
 	var rendered []string
 	for _, line := range lines {
 		rendered = append(rendered, w.renderLogLine(line, ctx))
+	}
+
+	// Viewport clipping.
+	if ctx.Height > 0 && len(rendered) > ctx.Height {
+		vs := w.vp.slice(len(rendered), ctx.Height, w.scrollOffset)
+		rendered = rendered[vs.Start:vs.End]
 	}
 
 	return strings.Join(rendered, "\n")

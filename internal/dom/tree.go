@@ -256,3 +256,205 @@ func childIndex(parent *Node, childID string) int {
 	}
 	return -1
 }
+
+// SetItems replaces all children of the target node with nodes expanded from
+// the target's item_template prop and the given data items.
+// For list-type nodes, items are set directly as the "items" prop.
+func (t *Tree) SetItems(targetID string, items []map[string]any) error {
+	target := t.Find(targetID)
+	if target == nil {
+		return fmt.Errorf("set_items: node %q not found", targetID)
+	}
+
+	// For list nodes, set items directly as a prop.
+	if target.Type == TypeList {
+		target.SetProp("items", mapSliceToAnySlice(items))
+		return nil
+	}
+
+	// For table nodes, set rows directly as a prop.
+	if target.Type == TypeTable {
+		target.SetProp("rows", mapSliceToAnySlice(items))
+		return nil
+	}
+
+	// For log nodes, set lines directly as a prop.
+	if target.Type == TypeLog {
+		target.SetProp("lines", mapSliceToAnySlice(items))
+		return nil
+	}
+
+	tmpl, err := ParseItemTemplate(target)
+	if err != nil {
+		return fmt.Errorf("set_items: %w", err)
+	}
+
+	if len(items) == 0 {
+		// Clear all children.
+		return t.Replace(targetID, nil)
+	}
+
+	specs, err := ExpandTemplate(targetID, tmpl, items)
+	if err != nil {
+		return fmt.Errorf("set_items: %w", err)
+	}
+	return t.Replace(targetID, specs)
+}
+
+// AppendItems expands template items and appends them as children of the target.
+// For list-type nodes, items are appended to the "items" prop.
+func (t *Tree) AppendItems(targetID string, items []map[string]any) error {
+	target := t.Find(targetID)
+	if target == nil {
+		return fmt.Errorf("append_items: node %q not found", targetID)
+	}
+
+	// For list nodes, append to the items prop.
+	if target.Type == TypeList {
+		existing := getItemsProp(target)
+		existing = append(existing, mapSliceToAnySlice(items)...)
+		target.SetProp("items", existing)
+		return nil
+	}
+
+	// For table nodes, append to the rows prop.
+	if target.Type == TypeTable {
+		existing := getRowsProp(target)
+		existing = append(existing, mapSliceToAnySlice(items)...)
+		target.SetProp("rows", existing)
+		return nil
+	}
+
+	// For log nodes, append to the lines prop.
+	if target.Type == TypeLog {
+		existing := getAnySliceProp(target, "lines")
+		existing = append(existing, mapSliceToAnySlice(items)...)
+		target.SetProp("lines", existing)
+		return nil
+	}
+
+	tmpl, err := ParseItemTemplate(target)
+	if err != nil {
+		return fmt.Errorf("append_items: %w", err)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	offset := len(target.Children)
+	specs, err := ExpandTemplateAt(targetID, tmpl, items, offset)
+	if err != nil {
+		return fmt.Errorf("append_items: %w", err)
+	}
+
+	for _, spec := range specs {
+		node, err := buildNodeFromSpec(spec)
+		if err != nil {
+			return fmt.Errorf("append_items: %w", err)
+		}
+		if err := t.Insert(targetID, node, ""); err != nil {
+			return fmt.Errorf("append_items: %w", err)
+		}
+	}
+	return nil
+}
+
+// RemoveItems removes children from the target by key or index.
+// For container nodes with templates, keys are used to compute child IDs as "{targetID}-{key}".
+// For list-type nodes, keys match the "id" field in the items prop.
+func (t *Tree) RemoveItems(targetID string, keys []string) error {
+	target := t.Find(targetID)
+	if target == nil {
+		return fmt.Errorf("remove_items: node %q not found", targetID)
+	}
+
+	// For list, table, and log nodes, filter items by id.
+	if target.Type == TypeList || target.Type == TypeTable || target.Type == TypeLog {
+		propName := "items"
+		if target.Type == TypeTable {
+			propName = "rows"
+		}
+		if target.Type == TypeLog {
+			propName = "lines"
+		}
+		existing := getAnySliceProp(target, propName)
+		keySet := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			keySet[k] = true
+		}
+		var remaining []any
+		for _, item := range existing {
+			m, ok := item.(map[string]any)
+			if ok {
+				if id, hasID := m["id"]; hasID {
+					if idStr, isStr := id.(string); isStr && keySet[idStr] {
+						continue
+					}
+				}
+			}
+			remaining = append(remaining, item)
+		}
+		// Verify all requested keys were found.
+		for _, k := range keys {
+			found := false
+			for _, item := range existing {
+				if m, ok := item.(map[string]any); ok {
+					if id, hasID := m["id"]; hasID {
+						if idStr, isStr := id.(string); isStr && idStr == k {
+							found = true
+							break
+						}
+					}
+				}
+			}
+			if !found {
+				return fmt.Errorf("remove_items: item %q not found in %s %q", k, target.Type, targetID)
+			}
+		}
+		if remaining == nil {
+			remaining = []any{}
+		}
+		target.SetProp(propName, remaining)
+		return nil
+	}
+
+	for _, key := range keys {
+		childID := targetID + "-" + key
+		if _, err := t.Remove(childID); err != nil {
+			return fmt.Errorf("remove_items: %w", err)
+		}
+	}
+	return nil
+}
+
+// mapSliceToAnySlice converts []map[string]any to []any for prop storage compatibility.
+func mapSliceToAnySlice(items []map[string]any) []any {
+	result := make([]any, len(items))
+	for i, item := range items {
+		result[i] = item
+	}
+	return result
+}
+
+// getItemsProp reads the "items" prop as []any, returning nil if not set.
+func getItemsProp(node *Node) []any {
+	return getAnySliceProp(node, "items")
+}
+
+// getRowsProp reads the "rows" prop as []any, returning nil if not set.
+func getRowsProp(node *Node) []any {
+	return getAnySliceProp(node, "rows")
+}
+
+// getAnySliceProp reads a named prop as []any, returning nil if not set.
+func getAnySliceProp(node *Node, key string) []any {
+	v, ok := node.GetProp(key)
+	if !ok {
+		return nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	return items
+}

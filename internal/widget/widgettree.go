@@ -1,7 +1,8 @@
 package widget
 
 import (
-	"fmt"
+	"io"
+	"log/slog"
 
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
@@ -12,6 +13,7 @@ import (
 type Tree struct {
 	registry  *Registry
 	instances map[string]Widget // keyed by node ID
+	logger    *slog.Logger
 }
 
 // NewTree creates a Tree backed by the given registry.
@@ -19,38 +21,53 @@ func NewTree(registry *Registry) *Tree {
 	return &Tree{
 		registry:  registry,
 		instances: make(map[string]Widget),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+}
+
+// SetLogger sets the structured logger for the widget tree.
+func (wt *Tree) SetLogger(l *slog.Logger) {
+	wt.logger = l
 }
 
 // Sync walks the DOM tree and ensures every node has a widget instance.
 // New instances are created and Init'd; instances for removed nodes are deleted.
+// Unknown widget types are skipped with a warning rather than aborting the walk.
 func (wt *Tree) Sync(tree *dom.Tree) error {
 	live := make(map[string]bool)
+	created := 0
+	skipped := 0
 
-	var syncErr error
 	tree.Walk(func(n *dom.Node) bool {
 		live[n.ID] = true
 		if _, exists := wt.instances[n.ID]; !exists {
 			w, err := wt.registry.Create(n.Type)
 			if err != nil {
-				syncErr = fmt.Errorf("sync node %q: %w", n.ID, err)
-				return false
+				wt.logger.Warn("sync: skipping node with unknown type",
+					"id", n.ID, "type", n.Type, "error", err)
+				skipped++
+				return true // continue walking — don't abort on unknown types
 			}
 			w.Init(n)
 			wt.instances[n.ID] = w
+			created++
 		}
 		return true
 	})
-	if syncErr != nil {
-		return syncErr
-	}
 
 	// Remove stale instances.
+	removed := 0
 	for id := range wt.instances {
 		if !live[id] {
 			delete(wt.instances, id)
+			removed++
 		}
 	}
+
+	wt.logger.Debug("sync complete",
+		"created", created, "removed", removed, "skipped", skipped,
+		"total_instances", len(wt.instances))
+
 	return nil
 }
 
@@ -64,15 +81,19 @@ func (wt *Tree) Get(nodeID string) Widget {
 // then Render (bottom-up) composes the output.
 func (wt *Tree) Render(tree *dom.Tree, width, height int, focusedID string) string {
 	if width <= 0 {
+		wt.logger.Warn("render: zero width", "width", width)
 		return ""
 	}
 	theme := DefaultTheme()
-	return wt.renderNode(tree.Root, width, height, focusedID, theme)
+	result := wt.renderNode(tree.Root, width, height, focusedID, theme)
+	wt.logger.Debug("render complete", "output_len", len(result), "width", width, "height", height)
+	return result
 }
 
 func (wt *Tree) renderNode(node *dom.Node, width, height int, focusedID string, theme *Theme) string {
 	w := wt.instances[node.ID]
 	if w == nil {
+		wt.logger.Warn("render: no widget instance", "id", node.ID, "type", node.Type)
 		return ""
 	}
 

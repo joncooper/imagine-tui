@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "imagine-tui": {
+      "command": "/Users/jdc/conductor/workspaces/imagine-tui/boise/imagine-tui",
+      "args": ["connect", "/tmp/imagine-tui.sock"]
+    }
+  }
+}

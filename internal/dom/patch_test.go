@@ -639,3 +639,169 @@ func TestPatchOpJSON(t *testing.T) {
 		t.Error("round-trip mismatch")
 	}
 }
+
+// --- Append patch op tests ---
+
+func TestPatchAppend_ToExistingArray(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("tags", []any{"x", "y"})
+
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "tags", Values: []any{"z", "w"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := tree.Find("a1").GetProp("tags")
+	arr := v.([]any)
+	if len(arr) != 4 {
+		t.Fatalf("got %d items, want 4", len(arr))
+	}
+	if arr[2] != "z" || arr[3] != "w" {
+		t.Error("appended values incorrect")
+	}
+}
+
+func TestPatchAppend_ToEmptyArray(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("tags", []any{})
+
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "tags", Values: []any{"a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := tree.Find("a1").GetProp("tags")
+	arr := v.([]any)
+	if len(arr) != 1 || arr[0] != "a" {
+		t.Errorf("got %v, want [a]", arr)
+	}
+}
+
+func TestPatchAppend_CreatesNewProp(t *testing.T) {
+	tree := makeTestTree(t)
+	// "tags" prop does not exist on a1
+
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "tags", Values: []any{"new"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok := tree.Find("a1").GetProp("tags")
+	if !ok {
+		t.Fatal("tags prop not created")
+	}
+	arr := v.([]any)
+	if len(arr) != 1 || arr[0] != "new" {
+		t.Errorf("got %v, want [new]", arr)
+	}
+}
+
+func TestPatchAppend_ToNonArrayFails(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("text", "hello")
+
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "text", Values: []any{"world"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-array prop")
+	}
+	// Verify rollback: text should still be "hello"
+	v, _ := tree.Find("a1").GetProp("text")
+	if v != "hello" {
+		t.Errorf("text = %v after rollback, want hello", v)
+	}
+}
+
+func TestPatchAppend_EmptyValues(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("tags", []any{"x"})
+
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "tags", Values: nil},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := tree.Find("a1").GetProp("tags")
+	arr := v.([]any)
+	if len(arr) != 1 {
+		t.Errorf("got %d items, want 1 (no-op)", len(arr))
+	}
+}
+
+func TestPatchAppend_MissingNodeFails(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "nonexistent", Prop: "tags", Values: []any{"x"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing node")
+	}
+}
+
+func TestPatchAppend_MissingID(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "", Prop: "tags", Values: []any{"x"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ID")
+	}
+}
+
+func TestPatchAppend_MissingProp(t *testing.T) {
+	tree := makeTestTree(t)
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "", Values: []any{"x"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty prop name")
+	}
+}
+
+func TestPatchAppend_InMultiOp(t *testing.T) {
+	tree := makeTestTree(t)
+	tree.Find("a1").SetProp("tags", []any{"x"})
+
+	// First op succeeds (append), second fails (update nonexistent) — rollback.
+	err := tree.Patch([]PatchOp{
+		{Op: OpAppend, ID: "a1", Prop: "tags", Values: []any{"y"}},
+		{Op: OpUpdate, ID: "nonexistent", Props: map[string]any{"text": "x"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// tags should be rolled back to ["x"].
+	v, _ := tree.Find("a1").GetProp("tags")
+	arr := v.([]any)
+	if len(arr) != 1 || arr[0] != "x" {
+		t.Errorf("tags = %v after rollback, want [x]", arr)
+	}
+}
+
+func TestParsePatchOps_WithAppend(t *testing.T) {
+	raw := `[{"op":"append","id":"log","prop":"lines","values":[{"text":"hello","level":"info"}]}]`
+	ops, err := ParsePatchOps([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(ops))
+	}
+	if ops[0].Op != OpAppend {
+		t.Errorf("op = %q, want append", ops[0].Op)
+	}
+	if ops[0].ID != "log" {
+		t.Errorf("id = %q, want log", ops[0].ID)
+	}
+	if ops[0].Prop != "lines" {
+		t.Errorf("prop = %q, want lines", ops[0].Prop)
+	}
+	if len(ops[0].Values) != 1 {
+		t.Fatalf("expected 1 value, got %d", len(ops[0].Values))
+	}
+}

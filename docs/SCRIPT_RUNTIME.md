@@ -104,14 +104,14 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 ### Step 4: M3-3 — $ API Cross-Node Access
 **Files:** extend `proxy.go`, `proxy_test.go`
 
-- [ ] Make `$` callable via `goja.NewProxy()` with `ProxyTrapConfig`: `Get`/`Set` → current node proxy, `Apply` → tree.Find(id) → new nodeProxy
-- [ ] `$('nonexistent')` returns a nodeProxy with `node: nil` (returns undefined on reads, false on writes, no crash)
-- [ ] Record `$('id')` calls in `currentEval.accessed` for computed prop dep tracking
-- [ ] Test: `$('existing').text` returns correct value
-- [ ] Test: `$('existing').text = 'new'` mutates target node
-- [ ] Test: `$('missing').text` returns undefined
-- [ ] Test: `$('missing').text = 'x'` doesn't crash
-- [ ] Test: chained access `$('a').value + $('b').value`
+- [x] Make `$` callable via `goja.NewProxy()` with `ProxyTrapConfig`: `Get`/`Set` → current node proxy, `Apply` → tree.Find(id) → new nodeProxy
+- [x] `$('nonexistent')` returns a nodeProxy with `node: nil` (returns undefined on reads, false on writes, no crash)
+- [x] Record `$('id')` calls via `recordDep()` stub (wired in M3-7)
+- [x] Test: `$('existing').text` returns correct value
+- [x] Test: `$('existing').text = 'new'` mutates target node
+- [x] Test: `$('missing').text` returns undefined
+- [x] Test: `$('missing').text = 'x'` doesn't crash
+- [x] Test: chained access `$('a').value + $('b').value`
 
 ### Step 5: M3-4 — emit()
 **Files:** `emit.go`, `emit_test.go`

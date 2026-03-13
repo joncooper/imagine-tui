@@ -130,9 +130,34 @@ func (rt *Runtime) execScript(nodeID, hook, body string, payload *HookPayload) e
 // setupContext binds $, state, emit, and event globals for a script invocation.
 // Must be called with rt.mu held.
 func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
-	// Bind $ as a DynamicObject proxy for the current node.
-	proxy := rt.vm.NewDynamicObject(&nodeProxy{rt: rt, node: node})
-	_ = rt.vm.Set("$", proxy)
+	// Bind $ as both an object ($.value) and callable ($('id')).
+	// We wrap a lookup function with a Proxy whose Get/Set traps
+	// delegate to the current node's properties.
+	currentProxy := &nodeProxy{rt: rt, node: node}
+
+	lookupFn := rt.vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 {
+			return goja.Undefined()
+		}
+		id := call.Arguments[0].String()
+		target := rt.tree.Find(id)
+		// Record dependency if we're evaluating a computed prop.
+		rt.recordDep(id)
+		return rt.vm.NewDynamicObject(&nodeProxy{rt: rt, node: target})
+	})
+
+	p := rt.vm.NewProxy(lookupFn.ToObject(rt.vm), &goja.ProxyTrapConfig{
+		Get: func(target *goja.Object, property string, receiver goja.Value) goja.Value {
+			return currentProxy.Get(property)
+		},
+		Set: func(target *goja.Object, property string, value goja.Value, receiver goja.Value) bool {
+			return currentProxy.Set(property, value)
+		},
+		Has: func(target *goja.Object, property string) bool {
+			return currentProxy.Has(property)
+		},
+	})
+	_ = rt.vm.Set("$", p)
 
 	// Bind per-node state object.
 	state := rt.getOrCreateState(node.ID)
@@ -144,6 +169,12 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	} else {
 		_ = rt.vm.Set("event", goja.Undefined())
 	}
+}
+
+// recordDep records a dependency on the given nodeID during computed prop evaluation.
+// No-op unless a computed prop evaluation is in progress.
+func (rt *Runtime) recordDep(_ string) {
+	// Will be implemented in the computed props step (M3-7).
 }
 
 // HookPayload is the data passed to a hook script.

@@ -21,10 +21,10 @@ func (rt *Runtime) makeEmitFn(sourceNodeID string) func(goja.FunctionCall) goja.
 		switch target {
 		case "local":
 			rt.emitLocal(call.Arguments[1])
-		case "claude":
-			rt.emitClaude(sourceNodeID, call.Arguments[1])
+		case "agent", "claude":
+			rt.emitAgent(sourceNodeID, call.Arguments[1])
 		default:
-			panic(rt.vm.NewTypeError(fmt.Sprintf("emit: invalid target %q (expected 'local' or 'claude')", target)))
+			panic(rt.vm.NewTypeError(fmt.Sprintf("emit: invalid target %q (expected 'local', 'agent', or deprecated 'claude')", target)))
 		}
 
 		return goja.Undefined()
@@ -47,8 +47,8 @@ func (rt *Runtime) emitLocal(opsVal goja.Value) {
 	}
 }
 
-// emitClaude enqueues an event for Claude Code via the event queue.
-func (rt *Runtime) emitClaude(sourceNodeID string, dataVal goja.Value) {
+// emitAgent enqueues an event for the MCP client via the event queue.
+func (rt *Runtime) emitAgent(sourceNodeID string, dataVal goja.Value) {
 	var data map[string]any
 	if exported, ok := dataVal.Export().(map[string]any); ok {
 		data = exported

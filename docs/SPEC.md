@@ -163,7 +163,7 @@ Handles: new screen construction, complex decisions, ambiguous user intent, data
 Each node's event hooks declare their tier:
 - `"local"` — handled entirely by BubbleTea (focus, scroll, cursor)
 - Script function body — runs in goja instantly
-- `"claude"` — queued for the next `await_event` call, which routes to Claude Code
+- `"agent"` — queued for the next `await_event` call, which routes to Claude Code
 
 ### Event coalescing
 Rapid user actions (toggling multiple filter checkboxes, repeated keypresses) can generate a burst of Claude-routed events. The `debounce_ms` parameter on `await_event` coalesces these into a single return, preventing wasteful round-trips. The server holds events for the debounce window and returns the most recent, with a `coalesced_count` field so Claude knows it missed intermediate states and can query if needed.
@@ -194,7 +194,7 @@ $('id').visible — show/hide
 $('id').rows   — table-specific accessors
 
 emit('local', patch)   — apply DOM patch instantly
-emit('claude', data)   — queue event for Claude Code
+emit('agent', data)   — queue event for Claude Code
 
 state                  — persistent script-local store
 state.x ??= 0         — survives across script invocations
@@ -225,7 +225,7 @@ $('results').render(
 ```
 
 ### Sandboxing
-goja is configured with no I/O primitives: no `require`, no `fetch`, no filesystem, no timers (the runtime provides `on_tick` as a hook instead). Scripts can read/write the DOM, keep local state, and `emit`. The only door to the outside world is `emit('claude', ...)`.
+goja is configured with no I/O primitives: no `require`, no `fetch`, no filesystem, no timers (the runtime provides `on_tick` as a hook instead). Scripts can read/write the DOM, keep local state, and `emit`. The only door to the outside world is `emit('agent', ...)`.
 
 ## Widget library
 

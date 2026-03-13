@@ -7,6 +7,7 @@ type HookType string
 const (
 	HookOnMount  HookType = "on_mount"
 	HookOnChange HookType = "on_change"
+	HookOnSubmit HookType = "on_submit"
 	HookOnEvent  HookType = "on_event"
 	HookOnFocus  HookType = "on_focus"
 	HookOnBlur   HookType = "on_blur"

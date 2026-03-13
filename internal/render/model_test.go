@@ -211,16 +211,37 @@ func TestModelZeroSizeReturnsEmpty(t *testing.T) {
 func TestModelMCPDisconnectedMsg(t *testing.T) {
 	m, _ := newTestModelWithTree(t)
 
-	newM, _ := m.Update(MCPDisconnectedMsg{})
+	newM, _ := m.Update(MCPConnectedMsg{SessionID: 1})
 	model := newM.(Model)
+	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1})
+	model2 := newM2.(Model)
 
-	if !model.disconnected {
-		t.Error("expected disconnected = true")
+	if !model2.waitingForReconnect {
+		t.Error("expected waitingForReconnect = true")
 	}
 
-	view := model.View()
-	if !strings.Contains(view, "disconnected") {
-		t.Errorf("view should show disconnect message, got:\n%s", view)
+	view := model2.View()
+	if !strings.Contains(view, "Agent disconnected.") {
+		t.Errorf("view should show reconnect modal, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Hello") {
+		t.Errorf("view should preserve last rendered UI, got:\n%s", view)
+	}
+}
+
+func TestModelIgnoresStaleDisconnect(t *testing.T) {
+	m, _ := newTestModelWithTree(t)
+
+	newM, _ := m.Update(MCPConnectedMsg{SessionID: 2})
+	model := newM.(Model)
+	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1})
+	model2 := newM2.(Model)
+
+	if model2.waitingForReconnect {
+		t.Error("stale disconnect should be ignored")
+	}
+	if model2.activeSessionID != 2 {
+		t.Errorf("activeSessionID = %d, want 2", model2.activeSessionID)
 	}
 }
 

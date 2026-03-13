@@ -816,8 +816,8 @@ When a widget's `Update()` produces an `Event`, the M5 runtime routes it:
 2. If script exists → run it (M3 responsibility). The widget's default behavior
    for this event is **skipped**.
 3. If no script → the widget's default behavior was already applied during
-   `Update()`. No further action unless the event is `"claude"` routed.
-4. If the script body is literally `"claude"` → enqueue in EventQueue.
+   `Update()`. No further action unless the event is `"agent"` routed.
+4. If the script body is literally `"agent"` → enqueue in EventQueue.
 
 This means widgets implement their default behaviors directly in `Update()`.
 Scripts override by replacing the hook. The runtime layer (M5) checks for

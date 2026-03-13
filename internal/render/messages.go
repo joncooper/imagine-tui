@@ -7,11 +7,14 @@ type DOMChangedMsg struct{}
 
 // MCPDisconnectedMsg is sent when the MCP connection breaks (e.g., broken pipe).
 type MCPDisconnectedMsg struct {
-	Err error
+	SessionID uint64
+	Err       error
 }
 
 // MCPConnectedMsg is sent when the MCP server is ready.
-type MCPConnectedMsg struct{}
+type MCPConnectedMsg struct {
+	SessionID uint64
+}
 
 // ShutdownMsg requests a graceful shutdown.
 type ShutdownMsg struct{}

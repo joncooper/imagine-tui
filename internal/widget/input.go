@@ -111,6 +111,11 @@ func (w *InputWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		}
 		w.value = string(runes)
 
+	case tea.KeySpace:
+		runes = append(runes[:w.cursorPos], append([]rune{' '}, runes[w.cursorPos:]...)...)
+		w.cursorPos++
+		w.value = string(runes)
+
 	default:
 		return UpdateResult{}
 	}

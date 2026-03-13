@@ -229,7 +229,7 @@ Current deferred files:
 **Status**: Complete — 154 tests, all passing. Design doc at docs/widget/DESIGN.md.
 
 ### M4-1: Widget registry & rendering pipeline ✅
-- Widget interface (Init/Update/View/Layout), Registry, WidgetTree
+- Widget interface (Init/Update/View/Layout), Registry, Tree
 - Two-pass rendering pipeline (top-down layout, bottom-up render)
 - Theme with style token resolution
 - Type-safe prop helpers

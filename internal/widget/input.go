@@ -17,6 +17,7 @@ type InputWidget struct {
 	valid     bool
 }
 
+// Init implements Widget.
 func (w *InputWidget) Init(node *dom.Node) {
 	w.value = PropString(node, "value", "")
 	w.cursorPos = len([]rune(w.value))
@@ -46,10 +47,12 @@ func (w *InputWidget) validate() {
 	w.valid = w.pattern.MatchString(w.value)
 }
 
+// Layout implements Widget.
 func (w *InputWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *InputWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -63,7 +66,7 @@ func (w *InputWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	case tea.KeyEnter:
 		return UpdateResult{
 			Consumed: true,
-			Events: []WidgetEvent{
+			Events: []Event{
 				{Type: "submit", NodeID: node.ID, Data: map[string]any{"value": w.value}},
 			},
 		}
@@ -117,9 +120,9 @@ func (w *InputWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	w.compilePattern(node)
 	w.validate()
 
-	var events []WidgetEvent
+	var events []Event
 	if w.value != oldValue {
-		events = append(events, WidgetEvent{
+		events = append(events, Event{
 			Type:   "change",
 			NodeID: node.ID,
 			Data:   map[string]any{"value": w.value},
@@ -129,6 +132,7 @@ func (w *InputWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	return UpdateResult{Consumed: true, Events: events}
 }
 
+// View implements Widget.
 func (w *InputWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

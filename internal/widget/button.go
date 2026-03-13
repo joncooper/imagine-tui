@@ -9,12 +9,15 @@ import (
 // ButtonWidget implements a focusable action trigger.
 type ButtonWidget struct{}
 
+// Init implements Widget.
 func (w *ButtonWidget) Init(_ *dom.Node) {}
 
+// Layout implements Widget.
 func (w *ButtonWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *ButtonWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -30,7 +33,7 @@ func (w *ButtonWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		}
 		return UpdateResult{
 			Consumed: true,
-			Events: []WidgetEvent{
+			Events: []Event{
 				{Type: "click", NodeID: node.ID, Data: map[string]any{}},
 			},
 		}
@@ -39,6 +42,7 @@ func (w *ButtonWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	}
 }
 
+// View implements Widget.
 func (w *ButtonWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

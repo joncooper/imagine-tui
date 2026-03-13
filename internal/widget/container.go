@@ -12,12 +12,15 @@ import (
 // ContainerWidget implements flex-like layout with vertical/horizontal direction.
 type ContainerWidget struct{}
 
+// Init implements Widget.
 func (w *ContainerWidget) Init(_ *dom.Node) {}
 
+// Update implements Widget.
 func (w *ContainerWidget) Update(_ tea.Msg, _ *dom.Node) UpdateResult {
 	return UpdateResult{}
 }
 
+// Layout implements Widget.
 func (w *ContainerWidget) Layout(node *dom.Node, ctx ViewContext) []ChildConstraint {
 	if len(node.Children) == 0 {
 		return nil
@@ -72,16 +75,17 @@ func (w *ContainerWidget) layoutHorizontal(node *dom.Node, available, gap int) [
 		case float64:
 			specs[i] = sizing{kind: "fixed", value: int(val)}
 		case string:
-			if val == "fill" {
+			switch {
+			case val == "fill":
 				specs[i] = sizing{kind: "fill"}
-			} else if strings.HasSuffix(val, "%") {
+			case strings.HasSuffix(val, "%"):
 				pct, err := strconv.Atoi(strings.TrimSuffix(val, "%"))
 				if err == nil {
 					specs[i] = sizing{kind: "percent", value: pct}
 				} else {
 					specs[i] = sizing{kind: "auto"}
 				}
-			} else {
+			default:
 				specs[i] = sizing{kind: "auto"}
 			}
 		default:
@@ -127,6 +131,7 @@ func (w *ContainerWidget) layoutHorizontal(node *dom.Node, available, gap int) [
 	return constraints
 }
 
+// View implements Widget.
 func (w *ContainerWidget) View(node *dom.Node, children []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

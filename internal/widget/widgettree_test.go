@@ -32,15 +32,15 @@ func testRegistry() *Registry {
 	return r
 }
 
-func TestNewWidgetTree(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestNewTree(t *testing.T) {
+	wt := NewTree(testRegistry())
 	if wt == nil {
-		t.Fatal("NewWidgetTree returned nil")
+		t.Fatal("NewTree returned nil")
 	}
 }
 
-func TestWidgetTree_Sync_CreatesInstances(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestTree_Sync_CreatesInstances(t *testing.T) {
+	wt := NewTree(testRegistry())
 	tree := makeTestTree(t)
 
 	if err := wt.Sync(tree); err != nil {
@@ -55,8 +55,8 @@ func TestWidgetTree_Sync_CreatesInstances(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Sync_InitCalledOnNewInstances(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestTree_Sync_InitCalledOnNewInstances(t *testing.T) {
+	wt := NewTree(testRegistry())
 	tree := makeTestTree(t)
 	_ = wt.Sync(tree)
 
@@ -66,8 +66,8 @@ func TestWidgetTree_Sync_InitCalledOnNewInstances(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Sync_RemovesStaleInstances(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestTree_Sync_RemovesStaleInstances(t *testing.T) {
+	wt := NewTree(testRegistry())
 	tree := makeTestTree(t)
 	_ = wt.Sync(tree)
 
@@ -84,8 +84,8 @@ func TestWidgetTree_Sync_RemovesStaleInstances(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Sync_PreservesExistingInstances(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestTree_Sync_PreservesExistingInstances(t *testing.T) {
+	wt := NewTree(testRegistry())
 	tree := makeTestTree(t)
 	_ = wt.Sync(tree)
 
@@ -98,12 +98,12 @@ func TestWidgetTree_Sync_PreservesExistingInstances(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Sync_UnregisteredType(t *testing.T) {
+func TestTree_Sync_UnregisteredType(t *testing.T) {
 	r := NewRegistry()
 	// Only register container, not text or button.
 	r.Register(dom.TypeContainer, func() Widget { return &stubWidget{} })
 
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	tree := makeTestTree(t)
 
 	err := wt.Sync(tree)
@@ -112,8 +112,8 @@ func TestWidgetTree_Sync_UnregisteredType(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Get_Nonexistent(t *testing.T) {
-	wt := NewWidgetTree(testRegistry())
+func TestTree_Get_Nonexistent(t *testing.T) {
+	wt := NewTree(testRegistry())
 	if wt.Get("nonexistent") != nil {
 		t.Error("expected nil for nonexistent widget")
 	}

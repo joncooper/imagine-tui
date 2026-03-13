@@ -22,6 +22,7 @@ type listItem struct {
 	Style string
 }
 
+// Init implements Widget.
 func (w *ListWidget) Init(node *dom.Node) {
 	items := w.parseItems(node)
 	w.rebuildFilter(items)
@@ -69,10 +70,12 @@ func (w *ListWidget) rebuildFilter(items []listItem) {
 	}
 }
 
+// Layout implements Widget.
 func (w *ListWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *ListWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -101,7 +104,7 @@ func (w *ListWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 			node.SetProp("selected", item.ID)
 			return UpdateResult{
 				Consumed: true,
-				Events: []WidgetEvent{
+				Events: []Event{
 					{
 						Type:   "select",
 						NodeID: node.ID,
@@ -113,7 +116,7 @@ func (w *ListWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		return UpdateResult{Consumed: true}
 
 	case tea.KeyBackspace:
-		if filterable && len(w.filterText) > 0 {
+		if filterable && w.filterText != "" {
 			w.filterText = w.filterText[:len(w.filterText)-1]
 			w.rebuildFilter(items)
 			w.selectedIndex = 0
@@ -135,6 +138,7 @@ func (w *ListWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	}
 }
 
+// View implements Widget.
 func (w *ListWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

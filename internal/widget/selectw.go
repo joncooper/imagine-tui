@@ -23,6 +23,7 @@ type selectOption struct {
 	Value string
 }
 
+// Init implements Widget.
 func (w *SelectWidget) Init(node *dom.Node) {
 	w.multi = PropBool(node, "multi", false)
 	w.selected = make(map[string]bool)
@@ -82,10 +83,12 @@ func (w *SelectWidget) rebuildFilter(opts []selectOption) {
 	}
 }
 
+// Layout implements Widget.
 func (w *SelectWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *SelectWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -142,7 +145,7 @@ func (w *SelectWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		return UpdateResult{Consumed: true}
 
 	case tea.KeyBackspace:
-		if w.open && filterable && len(w.filterText) > 0 {
+		if w.open && filterable && w.filterText != "" {
 			w.filterText = w.filterText[:len(w.filterText)-1]
 			w.rebuildFilter(opts)
 			w.highlighted = 0
@@ -202,7 +205,7 @@ func (w *SelectWidget) selectCurrent(opts []selectOption, node *dom.Node) Update
 		node.SetProp("selected", selected)
 		return UpdateResult{
 			Consumed: true,
-			Events: []WidgetEvent{
+			Events: []Event{
 				{Type: "change", NodeID: node.ID, Data: map[string]any{"selected": selected}},
 			},
 		}
@@ -216,12 +219,13 @@ func (w *SelectWidget) selectCurrent(opts []selectOption, node *dom.Node) Update
 	node.SetProp("selected", opt.Value)
 	return UpdateResult{
 		Consumed: true,
-		Events: []WidgetEvent{
+		Events: []Event{
 			{Type: "change", NodeID: node.ID, Data: map[string]any{"selected": opt.Value}},
 		},
 	}
 }
 
+// View implements Widget.
 func (w *SelectWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

@@ -10,12 +10,12 @@ import (
 
 // TextareaWidget implements a multi-line text input.
 type TextareaWidget struct {
-	value      string
-	cursorRow  int
-	cursorCol  int
-	scrollTop  int
+	value     string
+	cursorRow int
+	cursorCol int
 }
 
+// Init implements Widget.
 func (w *TextareaWidget) Init(node *dom.Node) {
 	w.value = PropString(node, "value", "")
 	lines := strings.Split(w.value, "\n")
@@ -23,10 +23,12 @@ func (w *TextareaWidget) Init(node *dom.Node) {
 	w.cursorCol = len([]rune(lines[w.cursorRow]))
 }
 
+// Layout implements Widget.
 func (w *TextareaWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *TextareaWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -129,9 +131,9 @@ func (w *TextareaWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 
 	node.SetProp("value", w.value)
 
-	var events []WidgetEvent
+	var events []Event
 	if w.value != oldValue {
-		events = append(events, WidgetEvent{
+		events = append(events, Event{
 			Type:   "change",
 			NodeID: node.ID,
 			Data:   map[string]any{"value": w.value},
@@ -140,6 +142,7 @@ func (w *TextareaWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	return UpdateResult{Consumed: true, Events: events}
 }
 
+// View implements Widget.
 func (w *TextareaWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

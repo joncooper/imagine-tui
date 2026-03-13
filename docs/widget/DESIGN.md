@@ -54,10 +54,10 @@ type Widget interface {
 ```go
 type UpdateResult struct {
     Consumed bool           // true if the event was handled (stop bubbling)
-    Events   []WidgetEvent  // events produced (routed by the runtime)
+    Events   []Event  // events produced (routed by the runtime)
 }
 
-type WidgetEvent struct {
+type Event struct {
     Type   string         // "change", "submit", "click", "select", etc.
     NodeID string         // source node ID
     Data   map[string]any // event payload
@@ -137,16 +137,16 @@ node types return an error.
 ### Widget instance management
 
 ```go
-// WidgetTree manages the lifecycle of widget instances for a DOM tree.
-type WidgetTree struct {
+// Tree manages the lifecycle of widget instances for a DOM tree.
+type Tree struct {
     registry  *Registry
     instances map[string]Widget // keyed by node ID
 }
 
-func NewWidgetTree(registry *Registry) *WidgetTree
-func (wt *WidgetTree) Sync(tree *dom.Tree) error     // create/remove instances to match DOM
-func (wt *WidgetTree) Get(nodeID string) Widget       // nil if not found
-func (wt *WidgetTree) Render(tree *dom.Tree, width, height int, focusedID string) string
+func NewTree(registry *Registry) *Tree
+func (wt *Tree) Sync(tree *dom.Tree) error     // create/remove instances to match DOM
+func (wt *Tree) Get(nodeID string) Widget       // nil if not found
+func (wt *Tree) Render(tree *dom.Tree, width, height int, focusedID string) string
 ```
 
 `Sync` walks the DOM tree and:
@@ -809,7 +809,7 @@ descendant focusable nodes. Which nodes are focusable:
 
 ### Event routing and default behaviors
 
-When a widget's `Update()` produces a `WidgetEvent`, the M5 runtime routes it:
+When a widget's `Update()` produces an `Event`, the M5 runtime routes it:
 
 1. Check if the source node has a script hook for this event type
    (`Scripts["on_change"]`, etc.)
@@ -899,7 +899,7 @@ assert:
 
 - Unknown node type → error
 - Two-pass render produces correct composed output for nested containers
-- WidgetTree sync creates/removes instances correctly
+- Tree sync creates/removes instances correctly
 
 ---
 

@@ -29,10 +29,12 @@ type diffLine struct {
 	NewNum  int
 }
 
+// Init implements Widget.
 func (w *DiffWidget) Init(node *dom.Node) {
 	w.mode = PropString(node, "mode", "unified")
 }
 
+// Layout implements Widget.
 func (w *DiffWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
@@ -70,6 +72,7 @@ func (w *DiffWidget) parseHunks(node *dom.Node) []diffHunk {
 	return hunks
 }
 
+// Update implements Widget.
 func (w *DiffWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -112,7 +115,7 @@ func (w *DiffWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		}
 		return UpdateResult{
 			Consumed: true,
-			Events: []WidgetEvent{
+			Events: []Event{
 				{Type: "select_line", NodeID: node.ID, Data: data},
 			},
 		}
@@ -134,7 +137,7 @@ func (w *DiffWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 				}
 				return UpdateResult{
 					Consumed: true,
-					Events: []WidgetEvent{
+					Events: []Event{
 						{Type: "hunk_navigate", NodeID: node.ID, Data: map[string]any{"hunk_index": w.currentHunk}},
 					},
 				}
@@ -145,7 +148,7 @@ func (w *DiffWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 				}
 				return UpdateResult{
 					Consumed: true,
-					Events: []WidgetEvent{
+					Events: []Event{
 						{Type: "hunk_navigate", NodeID: node.ID, Data: map[string]any{"hunk_index": w.currentHunk}},
 					},
 				}
@@ -164,6 +167,7 @@ func (w *DiffWidget) allLines(hunks []diffHunk) []diffLine {
 	return all
 }
 
+// View implements Widget.
 func (w *DiffWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

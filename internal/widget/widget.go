@@ -31,12 +31,12 @@ type Widget interface {
 
 // UpdateResult is returned by Widget.Update.
 type UpdateResult struct {
-	Consumed bool          // true if the event was handled (stop bubbling)
-	Events   []WidgetEvent // events produced (routed by the runtime)
+	Consumed bool    // true if the event was handled (stop bubbling)
+	Events   []Event // events produced (routed by the runtime)
 }
 
-// WidgetEvent is an event produced by a widget during Update.
-type WidgetEvent struct {
+// Event is an event produced by a widget during Update.
+type Event struct {
 	Type   string         // "change", "submit", "click", "select", etc.
 	NodeID string         // source node ID
 	Data   map[string]any // event payload

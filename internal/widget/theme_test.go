@@ -42,7 +42,7 @@ func TestTheme_Resolve_ColorTokens(t *testing.T) {
 
 	// Color tokens should produce styles with a foreground color set.
 	tests := []struct {
-		token    string
+		token     string
 		wantColor lipgloss.TerminalColor
 	}{
 		{"danger", lipgloss.Color("9")},

@@ -15,12 +15,15 @@ type CodeWidget struct {
 	scrollOffset int
 }
 
+// Init implements Widget.
 func (w *CodeWidget) Init(_ *dom.Node) {}
 
+// Layout implements Widget.
 func (w *CodeWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// Update implements Widget.
 func (w *CodeWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -48,6 +51,7 @@ func (w *CodeWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	}
 }
 
+// View implements Widget.
 func (w *CodeWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

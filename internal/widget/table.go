@@ -13,7 +13,6 @@ import (
 // TableWidget implements a sortable, scrollable table with expandable rows.
 type TableWidget struct {
 	selectedRow  int
-	scrollOffset int
 	sortColumn   string
 	sortAsc      bool
 	expandedRows map[int]bool
@@ -26,10 +25,12 @@ type tableColumn struct {
 	Sortable bool
 }
 
+// Init implements Widget.
 func (w *TableWidget) Init(_ *dom.Node) {
 	w.expandedRows = make(map[int]bool)
 }
 
+// Layout implements Widget.
 func (w *TableWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
@@ -43,9 +44,10 @@ func (w *TableWidget) parseColumns(node *dom.Node) []tableColumn {
 			Label: stringFromMap(m, "label"),
 		}
 		if w, ok := m["width"]; ok {
-			if wi, ok := w.(float64); ok {
+			switch wi := w.(type) {
+			case float64:
 				col.Width = int(wi)
-			} else if wi, ok := w.(int); ok {
+			case int:
 				col.Width = wi
 			}
 		}
@@ -59,6 +61,7 @@ func (w *TableWidget) parseColumns(node *dom.Node) []tableColumn {
 	return cols
 }
 
+// Update implements Widget.
 func (w *TableWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -86,7 +89,7 @@ func (w *TableWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 			w.expandedRows[w.selectedRow] = !w.expandedRows[w.selectedRow]
 			return UpdateResult{
 				Consumed: true,
-				Events: []WidgetEvent{
+				Events: []Event{
 					{
 						Type:   "expand",
 						NodeID: node.ID,
@@ -104,7 +107,7 @@ func (w *TableWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 		}
 		return UpdateResult{
 			Consumed: true,
-			Events: []WidgetEvent{
+			Events: []Event{
 				{
 					Type:   "select",
 					NodeID: node.ID,
@@ -118,6 +121,7 @@ func (w *TableWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	}
 }
 
+// View implements Widget.
 func (w *TableWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

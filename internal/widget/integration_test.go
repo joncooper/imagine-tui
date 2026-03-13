@@ -38,9 +38,9 @@ func TestIntegration_FullRenderPipeline(t *testing.T) {
 	btn.SetProp("label", "Click me")
 	_ = tree.Insert("root", btn, "")
 
-	// Create WidgetTree and render.
+	// Create Tree and render.
 	r := DefaultRegistry()
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	if err := wt.Sync(tree); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestIntegration_NestedContainers(t *testing.T) {
 	_ = tree.Insert("right", rt, "")
 
 	r := DefaultRegistry()
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	got := wt.Render(tree, 80, 24, "")
@@ -110,7 +110,7 @@ func TestIntegration_TableInContainer(t *testing.T) {
 	_ = tree.Insert("root", tbl, "")
 
 	r := DefaultRegistry()
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	got := wt.Render(tree, 60, 24, "results")
@@ -131,7 +131,7 @@ func TestIntegration_SyncAfterPatch(t *testing.T) {
 	_ = tree.Insert("root", txt, "")
 
 	r := DefaultRegistry()
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	got := wt.Render(tree, 40, 0, "")

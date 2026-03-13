@@ -20,10 +20,12 @@ type logLine struct {
 	Timestamp string
 }
 
+// Init implements Widget.
 func (w *LogWidget) Init(node *dom.Node) {
 	w.stickyBottom = PropBool(node, "auto_scroll", true)
 }
 
+// Layout implements Widget.
 func (w *LogWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
@@ -41,6 +43,7 @@ func (w *LogWidget) parseLines(node *dom.Node) []logLine {
 	return lines
 }
 
+// Update implements Widget.
 func (w *LogWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -73,6 +76,7 @@ func (w *LogWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
 	}
 }
 
+// View implements Widget.
 func (w *LogWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""

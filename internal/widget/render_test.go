@@ -6,7 +6,7 @@ import (
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
 
-func TestWidgetTree_Render_LeafNode(t *testing.T) {
+func TestTree_Render_LeafNode(t *testing.T) {
 	r := NewRegistry()
 	r.Register(dom.TypeText, func() Widget { return &stubWidget{} })
 
@@ -14,7 +14,7 @@ func TestWidgetTree_Render_LeafNode(t *testing.T) {
 	root.SetProp("text", "hello")
 	tree, _ := dom.NewTree(root)
 
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	got := wt.Render(tree, 40, 0, "")
@@ -23,14 +23,14 @@ func TestWidgetTree_Render_LeafNode(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Render_ZeroWidth(t *testing.T) {
+func TestTree_Render_ZeroWidth(t *testing.T) {
 	r := NewRegistry()
 	r.Register(dom.TypeText, func() Widget { return &stubWidget{} })
 
 	root, _ := dom.NewNode("root", dom.TypeText)
 	tree, _ := dom.NewTree(root)
 
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	got := wt.Render(tree, 0, 0, "")
@@ -39,7 +39,7 @@ func TestWidgetTree_Render_ZeroWidth(t *testing.T) {
 	}
 }
 
-func TestWidgetTree_Render_FocusPassedToWidget(t *testing.T) {
+func TestTree_Render_FocusPassedToWidget(t *testing.T) {
 	var capturedFocused bool
 	r := NewRegistry()
 	r.Register(dom.TypeButton, func() Widget {
@@ -49,7 +49,7 @@ func TestWidgetTree_Render_FocusPassedToWidget(t *testing.T) {
 	root, _ := dom.NewNode("btn", dom.TypeButton)
 	tree, _ := dom.NewTree(root)
 
-	wt := NewWidgetTree(r)
+	wt := NewTree(r)
 	_ = wt.Sync(tree)
 
 	_ = wt.Render(tree, 40, 0, "btn")

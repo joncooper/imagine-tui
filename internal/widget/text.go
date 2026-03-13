@@ -11,16 +11,20 @@ import (
 // TextWidget renders styled text content.
 type TextWidget struct{}
 
+// Init implements Widget.
 func (w *TextWidget) Init(_ *dom.Node) {}
 
+// Update implements Widget.
 func (w *TextWidget) Update(_ tea.Msg, _ *dom.Node) UpdateResult {
 	return UpdateResult{}
 }
 
+// Layout implements Widget.
 func (w *TextWidget) Layout(_ *dom.Node, _ ViewContext) []ChildConstraint {
 	return nil
 }
 
+// View implements Widget.
 func (w *TextWidget) View(node *dom.Node, _ []RenderedChild, ctx ViewContext) string {
 	if ctx.Width <= 0 {
 		return ""
@@ -69,10 +73,10 @@ func (w *TextWidget) renderSegments(segments []map[string]any, ctx ViewContext) 
 	return strings.Join(parts, "")
 }
 
-func truncateLines(s string, max int) string {
+func truncateLines(s string, limit int) string {
 	lines := strings.Split(s, "\n")
-	if len(lines) <= max {
+	if len(lines) <= limit {
 		return s
 	}
-	return strings.Join(lines[:max], "\n")
+	return strings.Join(lines[:limit], "\n")
 }

@@ -74,7 +74,7 @@ func goldenPath(t *testing.T, name string) string {
 // AssertNodeProps checks that a map contains all expected key-value pairs.
 // Extra keys in got are ignored. This is useful for checking a subset of node
 // properties without asserting the entire map.
-func AssertNodeProps(t *testing.T, got map[string]any, expected map[string]any) {
+func AssertNodeProps(t *testing.T, got, expected map[string]any) {
 	t.Helper()
 	for k, wantV := range expected {
 		gotV, ok := got[k]

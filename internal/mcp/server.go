@@ -1,7 +1,7 @@
 // Package mcp implements the MCP server and tool handlers (patch, replace,
 // await_event, snapshot, restore, query). Depends on dom/.
 //
-// Built on the MCP Go SDK (github.com/mark3labs/mcp-go).
+// Built on the official MCP Go SDK (github.com/modelcontextprotocol/go-sdk).
 package mcp
 
 import (
@@ -12,8 +12,7 @@ import (
 	"time"
 
 	"github.com/joncooper/imagine-tui/internal/dom"
-	mcpsdk "github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
@@ -22,7 +21,7 @@ type Server struct {
 	tree     *dom.Tree
 	events   *dom.EventQueue
 	snaps    *dom.SnapshotStore
-	mcp      *server.MCPServer
+	srv      *mcp.Server
 	shutdown chan struct{}
 }
 
@@ -45,19 +44,18 @@ func NewServer() (*Server, error) {
 		shutdown: make(chan struct{}),
 	}
 
-	s.mcp = server.NewMCPServer(
-		"imagine-tui",
-		"0.1.0",
-		server.WithToolCapabilities(false),
-	)
+	s.srv = mcp.NewServer(&mcp.Implementation{
+		Name:    "imagine-tui",
+		Version: "0.1.0",
+	}, nil)
 
 	s.registerTools()
 	return s, nil
 }
 
 // MCPServer returns the underlying MCP server for transport binding.
-func (s *Server) MCPServer() *server.MCPServer {
-	return s.mcp
+func (s *Server) MCPServer() *mcp.Server {
+	return s.srv
 }
 
 // Tree returns the current DOM tree. Callers must not mutate without holding the lock.
@@ -96,227 +94,250 @@ func (s *Server) IsShutdown() bool {
 	}
 }
 
+// --- Typed input structs ---
+
+type patchInput struct {
+	Ops json.RawMessage `json:"ops"`
+}
+
+type replaceInput struct {
+	TargetID string          `json:"target_id,omitempty"`
+	Tree     json.RawMessage `json:"tree,omitempty"`
+	Children json.RawMessage `json:"children,omitempty"`
+}
+
+type awaitEventInput struct {
+	TimeoutMs  int      `json:"timeout_ms,omitempty"`
+	Filter     []string `json:"filter,omitempty"`
+	DebounceMs int      `json:"debounce_ms,omitempty"`
+}
+
+type nameInput struct {
+	Name string `json:"name"`
+}
+
+type queryInput struct {
+	IDs []string `json:"ids"`
+}
+
+// --- Tool registration ---
+
 func (s *Server) registerTools() {
-	s.mcp.AddTool(patchTool(), s.handlePatch)
-	s.mcp.AddTool(replaceTool(), s.handleReplace)
-	s.mcp.AddTool(awaitEventTool(), s.handleAwaitEvent)
-	s.mcp.AddTool(snapshotTool(), s.handleSnapshot)
-	s.mcp.AddTool(restoreTool(), s.handleRestore)
-	s.mcp.AddTool(queryTool(), s.handleQuery)
+	s.srv.AddTool(patchTool(), s.handlePatch)
+	s.srv.AddTool(replaceTool(), s.handleReplace)
+	s.srv.AddTool(awaitEventTool(), s.handleAwaitEvent)
+	s.srv.AddTool(snapshotTool(), s.handleSnapshot)
+	s.srv.AddTool(restoreTool(), s.handleRestore)
+	s.srv.AddTool(queryTool(), s.handleQuery)
 }
 
-// --- Tool definitions ---
-
-func patchTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("patch",
-		mcpsdk.WithDescription("Apply an ordered list of atomic operations to the TUI DOM tree"),
-		mcpsdk.WithArray("ops",
-			mcpsdk.Required(),
-			mcpsdk.Description("Ordered list of patch operations (update, insert, remove, move)"),
+func patchTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "patch",
+		Description: "Apply an ordered list of atomic operations to the TUI DOM tree",
+		InputSchema: inputSchema(
+			prop("ops", "array", "Ordered list of patch operations (update, insert, remove, move)"),
+			"ops",
 		),
-	)
+	}
 }
 
-func replaceTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("replace",
-		mcpsdk.WithDescription("Replace an entire subtree or the whole tree"),
-		mcpsdk.WithString("target_id",
-			mcpsdk.Description("ID of the node whose children will be replaced. If omitted, replaces the entire tree."),
+func replaceTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "replace",
+		Description: "Replace an entire subtree or the whole tree",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("target_id", "string", "ID of the node whose children will be replaced. If omitted, replaces the entire tree."),
+				prop("tree", "object", "Full tree spec for whole-tree replacement (when target_id is omitted)"),
+				prop("children", "array", "Array of node specs to replace the target's children"),
+			),
 		),
-		mcpsdk.WithObject("tree",
-			mcpsdk.Description("Full tree spec for whole-tree replacement (when target_id is omitted)"),
-		),
-		mcpsdk.WithArray("children",
-			mcpsdk.Description("Array of node specs to replace the target's children"),
-		),
-	)
+	}
 }
 
-func awaitEventTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("await_event",
-		mcpsdk.WithDescription("Long-poll: block until a Claude-routed event fires, then return it with context"),
-		mcpsdk.WithNumber("timeout_ms",
-			mcpsdk.Description("Return timeout:true after this many milliseconds if no event fires"),
+func awaitEventTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "await_event",
+		Description: "Long-poll: block until a Claude-routed event fires, then return it with context",
+		InputSchema: inputSchema(
+			mergeProps(
+				prop("timeout_ms", "number", "Return timeout:true after this many milliseconds if no event fires"),
+				prop("filter", "array", "Array of node IDs to listen to. Events from other nodes are held."),
+				prop("debounce_ms", "number", "Coalesce rapid events within this window (ms)"),
+			),
 		),
-		mcpsdk.WithArray("filter",
-			mcpsdk.Description("Array of node IDs to listen to. Events from other nodes are held."),
-		),
-		mcpsdk.WithNumber("debounce_ms",
-			mcpsdk.Description("Coalesce rapid events within this window (ms)"),
-		),
-	)
+	}
 }
 
-func snapshotTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("snapshot",
-		mcpsdk.WithDescription("Save the current DOM state under a name"),
-		mcpsdk.WithString("name",
-			mcpsdk.Required(),
-			mcpsdk.Description("Name for this snapshot"),
+func snapshotTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "snapshot",
+		Description: "Save the current DOM state under a name",
+		InputSchema: inputSchema(
+			prop("name", "string", "Name for this snapshot"),
+			"name",
 		),
-	)
+	}
 }
 
-func restoreTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("restore",
-		mcpsdk.WithDescription("Restore the DOM to a previously saved snapshot"),
-		mcpsdk.WithString("name",
-			mcpsdk.Required(),
-			mcpsdk.Description("Name of the snapshot to restore"),
+func restoreTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "restore",
+		Description: "Restore the DOM to a previously saved snapshot",
+		InputSchema: inputSchema(
+			prop("name", "string", "Name of the snapshot to restore"),
+			"name",
 		),
-	)
+	}
 }
 
-func queryTool() mcpsdk.Tool {
-	return mcpsdk.NewTool("query",
-		mcpsdk.WithDescription("Read back current state of specific nodes"),
-		mcpsdk.WithArray("ids",
-			mcpsdk.Required(),
-			mcpsdk.Description("Array of node IDs to query"),
+func queryTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "query",
+		Description: "Read back current state of specific nodes",
+		InputSchema: inputSchema(
+			prop("ids", "array", "Array of node IDs to query"),
+			"ids",
 		),
-	)
+	}
+}
+
+// --- Schema helpers ---
+
+func prop(name, typ, desc string) map[string]any {
+	return map[string]any{
+		name: map[string]any{
+			"type":        typ,
+			"description": desc,
+		},
+	}
+}
+
+func mergeProps(props ...map[string]any) map[string]any {
+	merged := make(map[string]any)
+	for _, p := range props {
+		for k, v := range p {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
+func inputSchema(properties map[string]any, required ...string) map[string]any {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
 }
 
 // --- Tool handlers ---
 
-func (s *Server) handlePatch(_ context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	args := request.GetArguments()
-	opsRaw, ok := args["ops"]
-	if !ok {
-		return mcpsdk.NewToolResultError("missing required parameter: ops"), nil
+	var input patchInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if len(input.Ops) == 0 {
+		return errResult("missing required parameter: ops"), nil
 	}
 
-	// Marshal back to JSON so we can use ParsePatchOps.
-	opsJSON, err := json.Marshal(opsRaw)
+	ops, err := dom.ParsePatchOps(input.Ops)
 	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("invalid ops: %v", err)), nil
-	}
-
-	ops, err := dom.ParsePatchOps(opsJSON)
-	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("invalid ops: %v", err)), nil
+		return errResult(fmt.Sprintf("invalid ops: %v", err)), nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := s.tree.Patch(ops); err != nil {
-		return mcpsdk.NewToolResultError(err.Error()), nil
+		return errResult(err.Error()), nil
 	}
 
-	return resultJSON(map[string]any{"ok": true})
+	return jsonResult(map[string]any{"ok": true})
 }
 
-func (s *Server) handleReplace(_ context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	args := request.GetArguments()
-	targetID, _ := args["target_id"].(string)
+	var input replaceInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if targetID == "" {
+	if input.TargetID == "" {
 		// Whole-tree replacement.
-		treeRaw, ok := args["tree"]
-		if !ok {
-			return mcpsdk.NewToolResultError("replace requires either target_id or tree"), nil
-		}
-		treeJSON, err := json.Marshal(treeRaw)
-		if err != nil {
-			return mcpsdk.NewToolResultError(fmt.Sprintf("invalid tree spec: %v", err)), nil
+		if len(input.Tree) == 0 {
+			return errResult("replace requires either target_id or tree"), nil
 		}
 		var spec dom.NodeSpec
-		if err := json.Unmarshal(treeJSON, &spec); err != nil {
-			return mcpsdk.NewToolResultError(fmt.Sprintf("invalid tree spec: %v", err)), nil
+		if err := json.Unmarshal(input.Tree, &spec); err != nil {
+			return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
 		}
 		if err := s.tree.ReplaceTree(&spec); err != nil {
-			return mcpsdk.NewToolResultError(err.Error()), nil
+			return errResult(err.Error()), nil
 		}
-		return resultJSON(map[string]any{"ok": true})
+		return jsonResult(map[string]any{"ok": true})
 	}
 
 	// Subtree replacement.
-	childrenRaw, ok := args["children"]
-	if !ok {
-		return mcpsdk.NewToolResultError("replace with target_id requires children"), nil
-	}
-	childrenJSON, err := json.Marshal(childrenRaw)
-	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("invalid children: %v", err)), nil
+	if len(input.Children) == 0 {
+		return errResult("replace with target_id requires children"), nil
 	}
 	var specs []*dom.NodeSpec
-	if err := json.Unmarshal(childrenJSON, &specs); err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("invalid children: %v", err)), nil
+	if err := json.Unmarshal(input.Children, &specs); err != nil {
+		return errResult(fmt.Sprintf("invalid children: %v", err)), nil
 	}
-	if err := s.tree.Replace(targetID, specs); err != nil {
-		return mcpsdk.NewToolResultError(err.Error()), nil
+	if err := s.tree.Replace(input.TargetID, specs); err != nil {
+		return errResult(err.Error()), nil
 	}
 
-	return resultJSON(map[string]any{"ok": true})
+	return jsonResult(map[string]any{"ok": true})
 }
 
-func (s *Server) handleAwaitEvent(ctx context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	args := request.GetArguments()
-
-	// Parse timeout.
-	timeoutMs := 0
-	if v, ok := args["timeout_ms"]; ok {
-		if f, ok := v.(float64); ok {
-			timeoutMs = int(f)
-		}
-	}
-
-	// Parse filter.
-	var filter []string
-	if v, ok := args["filter"]; ok {
-		if arr, ok := v.([]any); ok {
-			for _, item := range arr {
-				if str, ok := item.(string); ok {
-					filter = append(filter, str)
-				}
-			}
-		}
-	}
-
-	// Parse debounce.
-	debounceMs := 0
-	if v, ok := args["debounce_ms"]; ok {
-		if f, ok := v.(float64); ok {
-			debounceMs = int(f)
-		}
+	var input awaitEventInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
 	}
 
 	// Build dequeue context with timeout.
 	deqCtx := ctx
-	if timeoutMs > 0 {
+	if input.TimeoutMs > 0 {
 		var cancel context.CancelFunc
-		deqCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+		deqCtx, cancel = context.WithTimeout(ctx, time.Duration(input.TimeoutMs)*time.Millisecond)
 		defer cancel()
 	}
 
 	opts := &dom.DequeueOpts{
-		Filter:     filter,
-		DebounceMs: debounceMs,
+		Filter:     input.Filter,
+		DebounceMs: input.DebounceMs,
 	}
 
 	evt, err := s.events.Dequeue(deqCtx, opts)
 	if err != nil {
 		// Check if this was a timeout.
-		if deqCtx.Err() != nil && timeoutMs > 0 {
-			return resultJSON(map[string]any{"timeout": true})
+		if deqCtx.Err() != nil && input.TimeoutMs > 0 {
+			return jsonResult(map[string]any{"timeout": true})
 		}
-		return mcpsdk.NewToolResultError(fmt.Sprintf("await_event: %v", err)), nil
+		return errResult(fmt.Sprintf("await_event: %v", err)), nil
 	}
 
 	// Enrich with DOM summary if not already present.
@@ -326,71 +347,70 @@ func (s *Server) handleAwaitEvent(ctx context.Context, request mcpsdk.CallToolRe
 		s.mu.Unlock()
 	}
 
-	return resultJSON(evt)
+	return jsonResult(evt)
 }
 
-func (s *Server) handleSnapshot(_ context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	name, _ := request.GetArguments()["name"].(string)
-	if name == "" {
-		return mcpsdk.NewToolResultError("missing required parameter: name"), nil
+	var input nameInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if input.Name == "" {
+		return errResult("missing required parameter: name"), nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.snaps.Snapshot(name, s.tree); err != nil {
-		return mcpsdk.NewToolResultError(err.Error()), nil
+	if err := s.snaps.Snapshot(input.Name, s.tree); err != nil {
+		return errResult(err.Error()), nil
 	}
 
-	return resultJSON(map[string]any{"ok": true, "name": name})
+	return jsonResult(map[string]any{"ok": true, "name": input.Name})
 }
 
-func (s *Server) handleRestore(_ context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	name, _ := request.GetArguments()["name"].(string)
-	if name == "" {
-		return mcpsdk.NewToolResultError("missing required parameter: name"), nil
+	var input nameInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
+	}
+	if input.Name == "" {
+		return errResult("missing required parameter: name"), nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.snaps.Restore(name, s.tree); err != nil {
-		return mcpsdk.NewToolResultError(err.Error()), nil
+	if err := s.snaps.Restore(input.Name, s.tree); err != nil {
+		return errResult(err.Error()), nil
 	}
 
-	return resultJSON(map[string]any{"ok": true, "restored": name})
+	return jsonResult(map[string]any{"ok": true, "restored": input.Name})
 }
 
-func (s *Server) handleQuery(_ context.Context, request mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.IsShutdown() {
-		return mcpsdk.NewToolResultError("server is shutting down"), nil
+		return errResult("server is shutting down"), nil
 	}
 
-	args := request.GetArguments()
-	idsRaw, ok := args["ids"]
-	if !ok {
-		return mcpsdk.NewToolResultError("missing required parameter: ids"), nil
+	var input queryInput
+	if err := unmarshalArgs(req, &input); err != nil {
+		return errResult(err.Error()), nil
 	}
-
-	var ids []string
-	if arr, ok := idsRaw.([]any); ok {
-		for _, item := range arr {
-			if str, ok := item.(string); ok {
-				ids = append(ids, str)
-			}
-		}
+	if len(input.IDs) == 0 {
+		return errResult("missing required parameter: ids"), nil
 	}
 
 	s.mu.Lock()
-	results, errs := s.tree.Query(ids)
+	results, errs := s.tree.Query(input.IDs)
 	s.mu.Unlock()
 
 	resp := map[string]any{
@@ -404,15 +424,30 @@ func (s *Server) handleQuery(_ context.Context, request mcpsdk.CallToolRequest) 
 		resp["errors"] = errStrs
 	}
 
-	return resultJSON(resp)
+	return jsonResult(resp)
 }
 
 // --- Helpers ---
 
-func resultJSON(v any) (*mcpsdk.CallToolResult, error) {
+func unmarshalArgs(req *mcp.CallToolRequest, v any) error {
+	if req.Params.Arguments == nil {
+		return nil
+	}
+	return json.Unmarshal(req.Params.Arguments, v)
+}
+
+func errResult(msg string) *mcp.CallToolResult {
+	r := &mcp.CallToolResult{}
+	r.SetError(fmt.Errorf("%s", msg))
+	return r
+}
+
+func jsonResult(v any) (*mcp.CallToolResult, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("marshal result: %v", err)), nil
+		return errResult(fmt.Sprintf("marshal result: %v", err)), nil
 	}
-	return mcpsdk.NewToolResultText(string(data)), nil
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}, nil
 }

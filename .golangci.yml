@@ -32,8 +32,7 @@ linters:
       enabled-tags:
         - diagnostic
         - style
-      disabled-checks:
-        - hugeParam
+      disabled-checks: []
     misspell:
       locale: US
 

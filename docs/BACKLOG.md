@@ -27,6 +27,15 @@ Every milestone has a testing mandate. The rule: **no code merges without corres
 
 ---
 
+## Deferred decisions & open questions
+
+Each module maintains a `docs/{module}/DEFERRED.md` file for items that were identified during design or implementation but deferred to a follow-up. These capture context, rationale, dependencies, and proposed designs so nothing is lost.
+
+Current deferred files:
+- [docs/widget/DEFERRED.md](widget/DEFERRED.md) — Widget module (Milestone 4)
+
+---
+
 ## Milestone 0: Project skeleton & CI
 
 **Goal**: Repo structure, build pipeline, dependency management, and the "hello world" of each layer wired together. Nothing works yet, but everything compiles and the test harness runs.
@@ -217,7 +226,7 @@ Every milestone has a testing mandate. The rule: **no code merges without corres
 
 **Goal**: All v1 widget types render correctly to the terminal via Lip Gloss. Golden-file tests for every widget. TDD encouraged for behavior; golden files for visual output.
 
-**Status**: Complete — 154 tests, all passing. Design doc at docs/M4-DESIGN.md.
+**Status**: Complete — 154 tests, all passing. Design doc at docs/widget/DESIGN.md.
 
 ### M4-1: Widget registry & rendering pipeline ✅
 - Widget interface (Init/Update/View/Layout), Registry, WidgetTree
@@ -272,13 +281,8 @@ Every milestone has a testing mandate. The rule: **no code merges without corres
 - Line numbers, start_line offset, highlight_lines (ints and ranges)
 - **Tests**: 11 test cases
 
-### Deferred to follow-up
-- Golden file tests (visual output testing — need terminal rendering context)
-- Chroma syntax highlighting for code widget (currently plain text)
-- Split mode for diff widget (unified implemented, split deferred)
-- OSC 52 clipboard yank for code widget
-- Focus cycling (Tab/Shift-Tab) in container (M5 integration concern)
-- `append_lines` merge hook for log widget (M2 patch engine extension)
+### Deferred items
+See [docs/widget/DEFERRED.md](widget/DEFERRED.md) for deferred decisions and open questions.
 
 ---
 

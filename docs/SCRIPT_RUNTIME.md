@@ -89,17 +89,17 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 ### Step 3: M3-2 — $ API Current Node
 **Files:** `proxy.go`, `proxy_test.go`
 
-- [ ] `nodeProxy` implementing goja's `DynamicObject` interface: `Get`, `Set`, `Has`, `Delete`, `Keys`
-- [ ] Property surface: `id` (read-only), `type` (read-only), `value`, `props`, `style`, `text`, `visible`, `children` (read-only), `rows`
-- [ ] `Get` reads from `node.GetProp()` / direct fields; `Set` calls `node.SetProp()` and marks dirty
-- [ ] Unknown keys fall through to props
-- [ ] `setupContext(node, payload)`: binds `$` proxy, `state`, `emit`, `event` globals
-- [ ] Test: read each property reflects DOM state
-- [ ] Test: write `$.value` updates DOM
-- [ ] Test: write `$.visible = false` updates DOM
-- [ ] Test: write to `$.id` fails (returns false)
-- [ ] Test: dirty set populated on write
-- [ ] Test: `$.children` returns child proxies
+- [x] `nodeProxy` implementing goja's `DynamicObject` interface: `Get`, `Set`, `Has`, `Delete`, `Keys`
+- [x] Property surface: `id` (read-only), `type` (read-only), `value`, `props`, `style`, `text`, `visible`, `children` (read-only), `rows`
+- [x] `Get` reads from `node.GetProp()` / direct fields; `Set` calls `node.SetProp()` and marks dirty
+- [x] Unknown keys fall through to props
+- [x] `setupContext(node, payload)`: binds `$` proxy, `state`, `emit`, `event` globals
+- [x] Test: read each property reflects DOM state
+- [x] Test: write `$.value` updates DOM
+- [x] Test: write `$.visible = false` updates DOM
+- [x] Test: write to `$.id` fails (returns false)
+- [x] Test: dirty set populated on write
+- [x] Test: `$.children` returns child proxies
 
 ### Step 4: M3-3 — $ API Cross-Node Access
 **Files:** extend `proxy.go`, `proxy_test.go`

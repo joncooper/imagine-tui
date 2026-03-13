@@ -77,14 +77,14 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 ### Step 2: M3-5 — State Object
 **Files:** `state.go`, `state_test.go`
 
-- [ ] `states map[string]*goja.Object` in Runtime
-- [ ] `getOrCreateState(nodeID)` → returns existing or new empty `goja.Object`
-- [ ] `removeState(nodeID)` → deletes entry
-- [ ] State bound as `state` global during script execution
-- [ ] Test: state persists across two invocations on same node
-- [ ] Test: state isolated between different nodes
-- [ ] Test: state survives DOM prop update (patch doesn't reset state)
-- [ ] Test: state gone after `removeState()` call
+- [x] `states map[string]*goja.Object` in Runtime
+- [x] `getOrCreateState(nodeID)` → returns existing or new empty `goja.Object`
+- [x] `removeState(nodeID)` → deletes entry
+- [x] State bound as `state` global during script execution
+- [x] Test: state persists across two invocations on same node
+- [x] Test: state isolated between different nodes
+- [x] Test: state survives DOM prop update (patch doesn't reset state)
+- [x] Test: state gone after `removeState()` call
 
 ### Step 3: M3-2 — $ API Current Node
 **Files:** `proxy.go`, `proxy_test.go`

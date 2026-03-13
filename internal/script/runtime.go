@@ -130,9 +130,18 @@ func (rt *Runtime) execScript(nodeID, hook, body string, payload *HookPayload) e
 // setupContext binds $, state, emit, and event globals for a script invocation.
 // Must be called with rt.mu held.
 func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
-	// Minimal setup for sandbox phase. Full $ proxy implemented in later steps.
-	_ = node
-	_ = payload
+	// Bind per-node state object.
+	state := rt.getOrCreateState(node.ID)
+	_ = rt.vm.Set("state", state)
+
+	// Bind event payload if present.
+	if payload != nil {
+		_ = rt.vm.Set("event", rt.vm.ToValue(payload))
+	} else {
+		_ = rt.vm.Set("event", goja.Undefined())
+	}
+
+	// $ proxy and emit() will be wired in later steps.
 }
 
 // HookPayload is the data passed to a hook script.

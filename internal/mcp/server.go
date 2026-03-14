@@ -756,6 +756,10 @@ func scriptingCatalog() *scriptingInfo {
 			{Name: "state", Description: "Per-node persistent JavaScript object — alias for $.state. Top-level reads in computed props are reactive; top-level writes dirty the node. nested object mutation is not tracked yet."},
 			{Name: "event", Description: "The hook payload object (e.g., key info for on_key, value for on_change). Only defined during hook execution."},
 			{Name: "debug(...args)", Description: "Log to the server's debug output (not visible in TUI)"},
+			{Name: "setTimeout(fn, delayMs)", Description: "Schedule a one-shot callback owned by the current node. Delays above the runtime cap are rejected."},
+			{Name: "setInterval(fn, delayMs)", Description: "Schedule a repeating callback owned by the current node. Use clearInterval(id) to stop it."},
+			{Name: "clearTimeout(id)", Description: "Cancel a pending timeout by timer ID"},
+			{Name: "clearInterval(id)", Description: "Cancel a pending interval by timer ID"},
 		},
 		Computed: computedInfo{
 			Description: "Computed props are reactive expressions that auto-update when dependencies change. Declare them in the node's computed map. Dependencies are tracked automatically via $ access and top-level state reads such as state.count, $.state.count, and $('store').state.count. nested object mutation is not tracked yet.",
@@ -763,7 +767,7 @@ func scriptingCatalog() *scriptingInfo {
 		},
 		Sandbox: sandboxInfo{
 			Description: "Scripts run in a locked-down ES5.1 sandbox. The only way to affect the outside world is via emit().",
-			Blocked:     []string{"require", "fetch", "XMLHttpRequest", "setTimeout", "setInterval", "console.log", "console.warn", "console.error"},
+			Blocked:     []string{"require", "fetch", "XMLHttpRequest", "setImmediate", "console.log", "console.warn", "console.error"},
 		},
 		Examples: []example{
 			{

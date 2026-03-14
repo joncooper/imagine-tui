@@ -1770,7 +1770,7 @@ func TestDescribeScripting_ReturnsGlobals(t *testing.T) {
 	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
 	text := resultText(t, result)
 
-	for _, global := range []string{"emit", "state", "event", "debug"} {
+	for _, global := range []string{"emit", "state", "event", "debug", "setTimeout", "setInterval", "clearTimeout", "clearInterval"} {
 		if !strings.Contains(text, global) {
 			t.Errorf("missing global %q in describe_scripting response", global)
 		}

@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joncooper/imagine-tui/internal/dom"
+	"github.com/joncooper/imagine-tui/internal/testutil"
 )
 
 func containerNode(t *testing.T, props map[string]any) *dom.Node {
@@ -257,6 +259,55 @@ func TestContainerView_Empty(t *testing.T) {
 	// Empty container should render something (possibly empty string).
 	// Just verify it doesn't panic.
 	_ = got
+}
+
+func TestContainerView_OverflowScroll_ClipsToHeight(t *testing.T) {
+	w := &ContainerWidget{}
+	n := containerNode(t, map[string]any{
+		"direction": "vertical",
+		"height":    3,
+		"overflow":  "scroll",
+	})
+
+	children := []RenderedChild{
+		{NodeID: "c1", View: "line1\nline2\nline3\nline4\nline5"},
+	}
+	ctx := ViewContext{Width: 5, Height: 10, Theme: DefaultTheme()}
+
+	got := w.View(n, children, ctx)
+
+	if strings.Contains(got, "line4") || strings.Contains(got, "line5") {
+		t.Fatalf("expected clipped output, got:\n%s", got)
+	}
+
+	testutil.GoldenFile(t, "widget/container_overflow_initial.golden", []byte(got+"\n"))
+}
+
+func TestContainerUpdate_OverflowScroll_ScrollsViewport(t *testing.T) {
+	w := &ContainerWidget{}
+	n := containerNode(t, map[string]any{
+		"direction": "vertical",
+		"height":    3,
+		"overflow":  "scroll",
+	})
+
+	children := []RenderedChild{
+		{NodeID: "c1", View: "line1\nline2\nline3\nline4\nline5"},
+	}
+	ctx := ViewContext{Width: 5, Height: 10, Theme: DefaultTheme()}
+
+	_ = w.View(n, children, ctx)
+	result := w.Update(tea.KeyMsg{Type: tea.KeyDown}, n)
+	if !result.Consumed {
+		t.Fatal("expected scroll key to be consumed")
+	}
+
+	got := w.View(n, children, ctx)
+	if !strings.Contains(got, "line4") || strings.Contains(got, "line1") {
+		t.Fatalf("expected viewport to scroll, got:\n%s", got)
+	}
+
+	testutil.GoldenFile(t, "widget/container_overflow_scrolled.golden", []byte(got+"\n"))
 }
 
 func TestContainerLayout_WithBorder_ReducesAvailable(t *testing.T) {

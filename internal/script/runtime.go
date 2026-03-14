@@ -163,8 +163,7 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	_ = rt.vm.Set("$", p)
 
 	// Bind per-node state object.
-	state := rt.getOrCreateState(node.ID)
-	_ = rt.vm.Set("state", state)
+	_ = rt.vm.Set("state", rt.makeStateProxy(node.ID))
 
 	// Bind emit function.
 	_ = rt.vm.Set("emit", rt.makeEmitFn(node.ID))

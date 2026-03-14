@@ -154,10 +154,11 @@ Items not tied to a milestone. Will be scheduled as needed.
 - **TDD**: layout calculation unit tests for grow/shrink/wrap scenarios
 
 ### Script runtime: state in computed props & cross-node state
-- Make `state` readable from computed props (currently only `$` props are accessible)
-- Add `$('other-node').state` for cross-node state sharing
+- Top-level `state` reads in computed props landed on 2026-03-13
+- `$('other-node').state` is now available for cross-node local state sharing
 - Eliminates the hidden-input workaround for shared reactive state
 - Key enabler for client-side-heavy UIs (games, dashboards with complex local logic)
+- Current limit: nested object mutation is not tracked yet; only top-level reads/writes are reactive
 - **TDD**: computed prop reads state, cross-node state access, reactivity triggers
 
 ### Script runtime: timers (setTimeout/setInterval)
@@ -166,6 +167,22 @@ Items not tied to a milestone. Will be scheduled as needed.
 - Must integrate with bubbletea's `tea.Tick` command pattern
 - Safety: max duration cap, max concurrent timers, auto-cancel on node removal
 - **TDD**: timer fires, timer cancels on remove, max limits enforced
+
+### Script runtime follow-ups
+- Automatic computed propagation after script execution
+- Note: dirty tracking exists now, but some paths still rely on callers to trigger propagation explicitly. Push this into the runtime so hooks/state writes behave consistently.
+- Current-node dependency tracking for `$.…` reads
+- Note: `$('id')` and top-level `state` reads are tracked, but self-reads like `$.value` and `$.props.foo` should also register dependencies so computed props re-run when the same node changes.
+- Runtime/script-state introspection for clients
+- Note: extend `query` or add a small runtime inspection tool so clients can debug `state` and computed behavior without guessing.
+- Richer `describe_scripting` payloads
+- Note: add hook payload schemas and concrete examples per hook/widget so clients know what `event` contains and how to compose local logic.
+- Timers / `on_tick`
+- Note: highest-leverage new feature after reactivity correctness. Keep hard caps, cleanup on node removal, and Bubble Tea integration.
+- Session persistence for script state
+- Note: once state becomes a real local data store, snapshots/restarts should include it.
+- Nested reactive state
+- Note: defer until there is real pressure from demos or clients. Recursive proxies add complexity and overhead fast.
 
 ### BubbleTea ecosystem widget integration
 - Progress bar widget (from `bubbles/progress`)

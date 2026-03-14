@@ -158,3 +158,24 @@ func TestStateDefaultsToEmptyObject(t *testing.T) {
 		t.Fatalf("state defaults: %v", err)
 	}
 }
+
+func TestStateWriteMarksCurrentNodeDirty(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	rt.mu.Lock()
+	rt.dirty = make(map[string]bool)
+	rt.mu.Unlock()
+
+	err := rt.execScript("root", "test", `state.count = 1`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt.mu.Lock()
+	isDirty := rt.dirty["root"]
+	rt.mu.Unlock()
+
+	if !isDirty {
+		t.Error("expected root to be in dirty set after state write")
+	}
+}

@@ -39,6 +39,46 @@ func TestEvalComputedReadsCrossNode(t *testing.T) {
 	}
 }
 
+func TestEvalComputedReadsCurrentNodeState(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	err := rt.execScript("child1", "test", `state.count = 2`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := rt.tree.Find("child1")
+	node.Computed["text"] = `return "count:" + state.count`
+
+	val, err := rt.EvalComputed("child1", "text", node.Computed["text"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "count:2" {
+		t.Errorf("expected 'count:2', got %v", val)
+	}
+}
+
+func TestEvalComputedReadsCrossNodeState(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	err := rt.execScript("child2", "test", `state.count = 4`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := rt.tree.Find("child1")
+	node.Computed["text"] = `return "count:" + $('child2').state.count`
+
+	val, err := rt.EvalComputed("child1", "text", node.Computed["text"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "count:4" {
+		t.Errorf("expected 'count:4', got %v", val)
+	}
+}
+
 func TestEvalComputedDependencyTracking(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 
@@ -102,6 +142,39 @@ func TestEvalComputedReEvalOnChange(t *testing.T) {
 	v, _ := child1.GetProp("text")
 	if v != "got:updated" {
 		t.Errorf("after propagation: expected 'got:updated', got %v", v)
+	}
+}
+
+func TestEvalComputedReEvalOnStateChange(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	err := rt.execScript("child2", "test", `state.count = 1`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child1 := rt.tree.Find("child1")
+	child1.Computed["text"] = `return "count:" + $('child2').state.count`
+
+	val, err := rt.EvalComputed("child1", "text", child1.Computed["text"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	child1.SetProp("text", val)
+
+	err = rt.execScript("child2", "test", `state.count = 2`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rt.PropagateChanges()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v, _ := child1.GetProp("text")
+	if v != "count:2" {
+		t.Errorf("after propagation: expected 'count:2', got %v", v)
 	}
 }
 

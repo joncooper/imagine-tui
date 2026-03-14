@@ -17,6 +17,7 @@ var readOnlyProps = map[string]bool{
 	"id":       true,
 	"type":     true,
 	"children": true,
+	"state":    true,
 }
 
 func (p *nodeProxy) Get(key string) goja.Value {
@@ -28,6 +29,8 @@ func (p *nodeProxy) Get(key string) goja.Value {
 		return p.rt.vm.ToValue(p.node.ID)
 	case "type":
 		return p.rt.vm.ToValue(string(p.node.Type))
+	case "state":
+		return p.rt.makeStateProxy(p.node.ID)
 	case "value":
 		return p.propValue("value")
 	case "props":
@@ -68,7 +71,7 @@ func (p *nodeProxy) Has(key string) bool {
 		return false
 	}
 	switch key {
-	case "id", "type", "value", "props", "style", "text", "visible", "children", "rows":
+	case "id", "type", "state", "value", "props", "style", "text", "visible", "children", "rows":
 		return true
 	default:
 		_, ok := p.node.GetProp(key)
@@ -84,7 +87,7 @@ func (p *nodeProxy) Keys() []string {
 	if p.node == nil {
 		return nil
 	}
-	keys := []string{"id", "type", "value", "props", "style", "text", "visible", "children"}
+	keys := []string{"id", "type", "state", "value", "props", "style", "text", "visible", "children"}
 	for k := range p.node.Props {
 		// Avoid duplicates with the well-known keys above.
 		switch k {

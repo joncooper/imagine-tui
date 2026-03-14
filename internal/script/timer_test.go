@@ -113,6 +113,63 @@ func TestSetIntervalFiresUntilCleared(t *testing.T) {
 	}
 }
 
+func TestTimerCallbackAutoPropagatesComputed(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	child2 := rt.tree.Find("child2")
+	child2.Computed["text"] = `return "count:" + ($('child1').state.count || 0)`
+	if err := rt.EvalAllComputed(); err != nil {
+		t.Fatalf("EvalAllComputed: %v", err)
+	}
+
+	if err := rt.execScript("child1", "test", `
+		setTimeout(function() {
+			state.count = 1;
+		}, 10)
+	`, nil); err != nil {
+		t.Fatalf("execScript: %v", err)
+	}
+
+	if ran, err := rt.RunDueTimers(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatalf("RunDueTimers when due: %v", err)
+	} else if !ran {
+		t.Fatal("expected timer callback to run")
+	}
+
+	if got, _ := child2.GetProp("text"); got != "count:1" {
+		t.Fatalf("expected computed text to update after timer callback, got %v", got)
+	}
+}
+
+func TestRunDueTimersAutoPropagatesComputedChanges(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	child1 := rt.tree.Find("child1")
+	child1.Computed["text"] = `return "timer:" + $('child2').value`
+
+	if err := rt.EvalAllComputed(); err != nil {
+		t.Fatalf("EvalAllComputed: %v", err)
+	}
+
+	if err := rt.execScript("child2", "test", `
+		setTimeout(function() {
+			$.value = "updated";
+		}, 10)
+	`, nil); err != nil {
+		t.Fatalf("execScript: %v", err)
+	}
+
+	if ran, err := rt.RunDueTimers(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatalf("RunDueTimers: %v", err)
+	} else if !ran {
+		t.Fatal("expected timer callback to run")
+	}
+
+	if got, _ := child1.GetProp("text"); got != "timer:updated" {
+		t.Fatalf("expected computed prop to update after timer callback, got %v", got)
+	}
+}
+
 func TestTimersCancelOnNotifyRemove(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 

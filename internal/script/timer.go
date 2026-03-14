@@ -56,6 +56,7 @@ func (rt *Runtime) RunDueTimers(now time.Time) (bool, error) {
 	}
 
 	rt.dirty = make(map[string]bool)
+	rt.dirtySources = make(map[sourceKey]bool)
 
 	ran := false
 	var firstErr error
@@ -91,6 +92,10 @@ func (rt *Runtime) RunDueTimers(now time.Time) (bool, error) {
 		}
 
 		ran = true
+	}
+
+	if err := rt.propagateChangesLocked(nil); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
 	return ran, firstErr

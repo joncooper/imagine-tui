@@ -17,6 +17,7 @@ var readOnlyProps = map[string]bool{
 	"id":       true,
 	"type":     true,
 	"children": true,
+	"state":    true,
 }
 
 func (p *nodeProxy) Get(key string) goja.Value {
@@ -28,15 +29,22 @@ func (p *nodeProxy) Get(key string) goja.Value {
 		return p.rt.vm.ToValue(p.node.ID)
 	case "type":
 		return p.rt.vm.ToValue(string(p.node.Type))
+	case "state":
+		return p.rt.makeStateProxy(p.node.ID)
 	case "value":
+		p.rt.recordSourceDep(propSource(p.node.ID, "value"))
 		return p.propValue("value")
 	case "props":
+		p.rt.recordSourceDep(propSource(p.node.ID, "props"))
 		return p.rt.vm.ToValue(p.node.Props)
 	case "style":
+		p.rt.recordSourceDep(propSource(p.node.ID, "style"))
 		return p.propValue("style")
 	case "text":
+		p.rt.recordSourceDep(propSource(p.node.ID, "text"))
 		return p.propValue("text")
 	case "visible":
+		p.rt.recordSourceDep(propSource(p.node.ID, "visible"))
 		v, ok := p.node.GetProp("visible")
 		if !ok {
 			return p.rt.vm.ToValue(true) // default visible
@@ -45,8 +53,10 @@ func (p *nodeProxy) Get(key string) goja.Value {
 	case "children":
 		return p.rt.makeChildArray(p.node)
 	case "rows":
+		p.rt.recordSourceDep(propSource(p.node.ID, "rows"))
 		return p.propValue("rows")
 	default:
+		p.rt.recordSourceDep(propSource(p.node.ID, key))
 		return p.propValue(key)
 	}
 }
@@ -59,7 +69,7 @@ func (p *nodeProxy) Set(key string, val goja.Value) bool {
 		return false
 	}
 	p.node.SetProp(key, val.Export())
-	p.rt.markDirty(p.node.ID)
+	p.rt.markDirtyProp(p.node.ID, key)
 	return true
 }
 
@@ -67,8 +77,9 @@ func (p *nodeProxy) Has(key string) bool {
 	if p.node == nil {
 		return false
 	}
+	p.rt.recordSourceDep(propSource(p.node.ID, "props"))
 	switch key {
-	case "id", "type", "value", "props", "style", "text", "visible", "children", "rows":
+	case "id", "type", "state", "value", "props", "style", "text", "visible", "children", "rows":
 		return true
 	default:
 		_, ok := p.node.GetProp(key)
@@ -84,7 +95,8 @@ func (p *nodeProxy) Keys() []string {
 	if p.node == nil {
 		return nil
 	}
-	keys := []string{"id", "type", "value", "props", "style", "text", "visible", "children"}
+	p.rt.recordSourceDep(propSource(p.node.ID, "props"))
+	keys := []string{"id", "type", "state", "value", "props", "style", "text", "visible", "children"}
 	for k := range p.node.Props {
 		// Avoid duplicates with the well-known keys above.
 		switch k {
@@ -120,4 +132,20 @@ func (rt *Runtime) makeChildArray(node *dom.Node) goja.Value {
 // Must be called with rt.mu held.
 func (rt *Runtime) markDirty(nodeID string) {
 	rt.dirty[nodeID] = true
+}
+
+// markDirtyProp records a precise prop change while keeping node-level dirty
+// bookkeeping for callers and tests that only care which nodes changed.
+// Must be called with rt.mu held.
+func (rt *Runtime) markDirtyProp(nodeID, propName string) {
+	rt.markDirty(nodeID)
+	rt.dirtySources[propSource(nodeID, propName)] = true
+	rt.dirtySources[propSource(nodeID, "props")] = true
+}
+
+// markDirtyState records a precise top-level state change.
+// Must be called with rt.mu held.
+func (rt *Runtime) markDirtyState(nodeID, key string) {
+	rt.markDirty(nodeID)
+	rt.dirtySources[stateSource(nodeID, key)] = true
 }

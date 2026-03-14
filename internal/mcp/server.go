@@ -64,13 +64,18 @@ const serverInstructions = `imagine-tui is an MCP server that renders interactiv
 
 ## Key tools
 - describe_widgets: Discover widget types (call this first!)
-- describe_scripting: Learn the reactive scripting system (hooks, $ API, computed props, emit)
+- describe_scripting: Learn the reactive scripting system (hooks, $ API, computed props, emit, state, $.state, $('id').state, timers)
 - layout: Define UI structure (container, text, list, table, button, input, etc.)
 - set_items / append_items / remove_items: Efficiently populate list, table, and log widgets with data
 - patch: Incremental DOM updates (update props, insert/remove nodes)
 - await_event: Long-poll for user events (click, select, submit, change)
 - query: Read current node state
 - snapshot / restore: Save and restore UI checkpoints
+
+## Reactive scripting
+If you add scripts or computed props, call describe_scripting before writing them.
+It documents hook names, emit(), per-node state, and reactive state access via $.state and $('id').state.
+Current state reactivity is top-level only: reads like state.count or $('store').state.count are tracked, but nested object mutation is not tracked yet.
 
 ## Widget overview
 Widgets include: container (layout), text, list (navigable with up/down/enter),
@@ -676,7 +681,7 @@ func (s *Server) handleDescribeWidgets(_ context.Context, req *mcp.CallToolReque
 func describeScriptingTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_scripting",
-		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, and state. Call this to learn how to add client-side logic to widgets.",
+		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, state, and timers. Call this to learn how to add client-side logic to widgets.",
 		InputSchema: schema(nil),
 	}
 }
@@ -734,6 +739,7 @@ func scriptingCatalog() *scriptingInfo {
 			{Name: "$", Description: "Current node proxy. Read/write props: $.value, $.text, $.style, $.visible, $.rows, $.props.{key}"},
 			{Name: "$.id", Description: "Node ID", ReadOnly: true},
 			{Name: "$.type", Description: "Node type", ReadOnly: true},
+			{Name: "$.state", Description: "Current node's persistent state object. Top-level reads in computed props are reactive; top-level writes mark the node dirty.", ReadOnly: true},
 			{Name: "$.value", Description: "The node's value (for inputs, textareas, selects)"},
 			{Name: "$.props", Description: "All props as an object — read or write individual keys"},
 			{Name: "$.style", Description: "Style token string"},
@@ -742,11 +748,12 @@ func scriptingCatalog() *scriptingInfo {
 			{Name: "$.children", Description: "Child node proxies (read-only array)", ReadOnly: true},
 			{Name: "$.rows", Description: "Table rows array"},
 			{Name: "$('id')", Description: "Look up any node by ID and return a proxy with the same read/write API"},
+			{Name: "$('id').state", Description: "Another node's persistent state object. Use this for shared local state across widgets; top-level reads and writes are reactive."},
 		},
 		Globals: []apiEntry{
 			{Name: "emit('local', patchOps)", Description: "Apply a DOM patch synchronously from within the script (no MCP round-trip)"},
 			{Name: "emit('agent', data)", Description: "Queue an event for the MCP client (delivered via await_event)"},
-			{Name: "state", Description: "Per-node persistent JavaScript object — survives across hook invocations"},
+			{Name: "state", Description: "Per-node persistent JavaScript object — alias for $.state. Top-level reads in computed props are reactive; top-level writes dirty the node. nested object mutation is not tracked yet."},
 			{Name: "event", Description: "The hook payload object (e.g., key info for on_key, value for on_change). Only defined during hook execution."},
 			{Name: "debug(...args)", Description: "Log to the server's debug output (not visible in TUI)"},
 			{Name: "setTimeout(fn, delayMs)", Description: "Schedule a one-shot callback owned by the current node. Delays above the runtime cap are rejected."},
@@ -755,7 +762,7 @@ func scriptingCatalog() *scriptingInfo {
 			{Name: "clearInterval(id)", Description: "Cancel a pending interval by timer ID"},
 		},
 		Computed: computedInfo{
-			Description: "Computed props are reactive expressions that auto-update when dependencies change. Declare them in the node's computed map. Dependencies are tracked automatically via $ access.",
+			Description: "Computed props are reactive expressions that auto-update when dependencies change. Declare them in the node's computed map. Dependencies are tracked automatically via $ access and top-level state reads such as state.count, $.state.count, and $('store').state.count. nested object mutation is not tracked yet.",
 			Declaration: "In node spec: {\"computed\": {\"display_text\": \"return $.value.toUpperCase()\"}}",
 		},
 		Sandbox: sandboxInfo{
@@ -766,6 +773,10 @@ func scriptingCatalog() *scriptingInfo {
 			{
 				Title: "Computed prop: live character count",
 				Code:  `{"computed": {"char_count": "return 'Characters: ' + ($.value || '').length"}}`,
+			},
+			{
+				Title: "Computed prop: shared state from another node",
+				Code:  `{"computed": {"status": "return $('filters').state.activeCount + ' active filters'"}}`,
 			},
 			{
 				Title: "on_change hook: filter a list when input changes",

@@ -64,7 +64,7 @@ const serverInstructions = `imagine-tui is an MCP server that renders interactiv
 
 ## Key tools
 - describe_widgets: Discover widget types (call this first!)
-- describe_scripting: Learn the reactive scripting system (hooks, $ API, computed props, emit, state, $.state, $('id').state)
+- describe_scripting: Learn the reactive scripting system (hooks, $ API, computed props, emit, state, $.state, $('id').state, timers)
 - layout: Define UI structure (container, text, list, table, button, input, etc.)
 - set_items / append_items / remove_items: Efficiently populate list, table, and log widgets with data
 - patch: Incremental DOM updates (update props, insert/remove nodes)
@@ -681,7 +681,7 @@ func (s *Server) handleDescribeWidgets(_ context.Context, req *mcp.CallToolReque
 func describeScriptingTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_scripting",
-		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, and state. Call this to learn how to add client-side logic to widgets.",
+		Description: "Describe the reactive scripting system: lifecycle hooks, the $ node API, computed props, emit, state, and timers. Call this to learn how to add client-side logic to widgets.",
 		InputSchema: schema(nil),
 	}
 }

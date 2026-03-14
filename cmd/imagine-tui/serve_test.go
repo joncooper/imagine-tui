@@ -304,9 +304,11 @@ func TestFullStackPTY(t *testing.T) {
 		t.Fatalf("pty.Start: %v", err)
 	}
 	defer func() {
-		_ = cmd.Process.Signal(os.Interrupt)
-		_ = cmd.Wait()
 		_ = ptmx.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		}
 	}()
 
 	// Wait for the socket to appear (server is ready).

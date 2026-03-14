@@ -65,7 +65,7 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 **Files:** `runtime.go`, `errors.go`, `sandbox_test.go`
 
 - [x] `Runtime` struct with `New()` constructor, `goja.Runtime` init
-- [x] `initSandbox()`: delete `require`, `console`, `fetch`, `setTimeout`, `setInterval`, `process`, `globalThis`; provide `debug()` routing to server log
+- [x] `initSandbox()`: delete `require`, `console`, `fetch`, `process`, `globalThis`; provide `debug()` routing to server log
 - [x] Timeout mechanism: `time.AfterFunc(rt.timeout, func() { rt.vm.Interrupt(...) })` + `vm.ClearInterrupt()`
 - [x] `Error` type (renamed from `ScriptError` per lint) with `NodeID`, `Hook`, `Message`, `IsTimeout`
 - [x] Test: forbidden API access returns error (not panic)
@@ -160,6 +160,23 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 - [x] Test: error in expression → Error with node ID
 - [x] Test: computed prop depending on another computed prop (transitive deps)
 - [x] Test: EvalAllComputed evaluates all computed props in tree
+
+### Step 8: M3-8 — Timers
+**Files:** `timer.go`, `timer_test.go`, `runtime.go`, `hooks.go`, `internal/render/model.go`
+
+- [x] Timer state added to `Runtime` with per-node ownership tracking
+- [x] `setTimeout`, `setInterval`, `clearTimeout`, and `clearInterval` exposed in the sandbox
+- [x] Delays above the configured max timer duration are rejected
+- [x] Max concurrent timers enforced at registration time
+- [x] `RunDueTimers()` executes callbacks under the existing serialized VM lock
+- [x] `NextTimerAt()` exposes the next due timer for Bubble Tea scheduling
+- [x] `NotifyRemove()` cancels timers owned by the removed node
+- [x] Render model schedules timers via `tea.Tick` and runs callbacks in `Update`
+- [x] Test: timeout fires when due
+- [x] Test: cleared timeout does not fire
+- [x] Test: interval fires until cleared
+- [x] Test: timers cancel on node removal
+- [x] Test: max duration and max concurrent limits are enforced
 
 ---
 

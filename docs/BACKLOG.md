@@ -144,6 +144,7 @@ Items not tied to a milestone. Will be scheduled as needed.
 - Discovered during live demo: log/narrative panels overflow their containers
 - **Implementation**: wrap container rendering in `viewport.Model` when `overflow: "scroll"` and height is constrained
 - **Runtime note**: overflow-scrolling containers must be keyboard-focusable alongside the existing scrollable widget defaults (`log`, `code`)
+- **Future follow-up**: add a clearer focus-policy API for passive scroll panes so logs/code blocks can opt out of Tab order without relying on the generic `focusable` override
 - **Scope note**: keep scroll position as widget-local runtime state for now; snapshot/query serialization can be handled separately
 - **TDD**: golden file tests for constrained containers, overflow clipping
 

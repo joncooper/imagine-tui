@@ -16,16 +16,17 @@ const defaultTimeout = 10 * time.Millisecond
 // Runtime is the script execution engine for a session.
 // It owns a single goja VM and manages per-node state.
 type Runtime struct {
-	mu          sync.Mutex
-	vm          *goja.Runtime
-	tree        *dom.Tree
-	events      *dom.EventQueue
-	states      map[string]*goja.Object // nodeID -> persistent JS state
-	deps        *DepGraph               // computed prop dependency tracking
-	dirty       map[string]bool         // nodes modified since last propagation
-	currentEval *evalCtx                // non-nil during computed prop eval
-	timeout     time.Duration
-	debugLog    func(string)
+	mu           sync.Mutex
+	vm           *goja.Runtime
+	tree         *dom.Tree
+	events       *dom.EventQueue
+	states       map[string]*goja.Object // nodeID -> persistent JS state
+	deps         *DepGraph               // computed prop dependency tracking
+	dirty        map[string]bool         // nodes modified since last propagation
+	dirtySources map[sourceKey]bool      // precise prop/state sources modified since last propagation
+	currentEval  *evalCtx                // non-nil during computed prop eval
+	timeout      time.Duration
+	debugLog     func(string)
 }
 
 // Option configures the Runtime.
@@ -48,13 +49,14 @@ func WithDebugLog(fn func(string)) Option {
 // New creates a new script Runtime bound to a DOM tree and event queue.
 func New(tree *dom.Tree, events *dom.EventQueue, opts ...Option) *Runtime {
 	rt := &Runtime{
-		vm:      goja.New(),
-		tree:    tree,
-		events:  events,
-		states:  make(map[string]*goja.Object),
-		deps:    newDepGraph(),
-		dirty:   make(map[string]bool),
-		timeout: defaultTimeout,
+		vm:           goja.New(),
+		tree:         tree,
+		events:       events,
+		states:       make(map[string]*goja.Object),
+		deps:         newDepGraph(),
+		dirty:        make(map[string]bool),
+		dirtySources: make(map[sourceKey]bool),
+		timeout:      defaultTimeout,
 	}
 	for _, opt := range opts {
 		opt(rt)
@@ -144,8 +146,6 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 		}
 		id := call.Arguments[0].String()
 		target := rt.tree.Find(id)
-		// Record dependency if we're evaluating a computed prop.
-		rt.recordDep(id)
 		return rt.vm.NewDynamicObject(&nodeProxy{rt: rt, node: target})
 	})
 
@@ -176,11 +176,12 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	}
 }
 
-// recordDep records a dependency on the given nodeID during computed prop evaluation.
-// No-op unless a computed prop evaluation is in progress. Must be called with rt.mu held.
-func (rt *Runtime) recordDep(nodeID string) {
+// recordSourceDep records a dependency on a specific source during computed prop
+// evaluation. No-op unless a computed prop evaluation is in progress. Must be
+// called with rt.mu held.
+func (rt *Runtime) recordSourceDep(source sourceKey) {
 	if rt.currentEval != nil {
-		rt.currentEval.accessed[nodeID] = true
+		rt.currentEval.accessed[source] = true
 	}
 }
 

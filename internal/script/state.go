@@ -21,7 +21,7 @@ type stateProxy struct {
 }
 
 func (p *stateProxy) Get(key string) goja.Value {
-	p.rt.recordDep(p.nodeID)
+	p.rt.recordSourceDep(stateSource(p.nodeID, key))
 
 	state := p.rt.getOrCreateState(p.nodeID)
 	val := state.Get(key)
@@ -36,12 +36,12 @@ func (p *stateProxy) Set(key string, val goja.Value) bool {
 	if err := state.Set(key, val); err != nil {
 		return false
 	}
-	p.rt.markDirty(p.nodeID)
+	p.rt.markDirtyState(p.nodeID, key)
 	return true
 }
 
 func (p *stateProxy) Has(key string) bool {
-	p.rt.recordDep(p.nodeID)
+	p.rt.recordSourceDep(stateSource(p.nodeID, key))
 
 	state := p.rt.getOrCreateState(p.nodeID)
 	val := state.Get(key)
@@ -53,13 +53,11 @@ func (p *stateProxy) Delete(key string) bool {
 	if err := state.Delete(key); err != nil {
 		return false
 	}
-	p.rt.markDirty(p.nodeID)
+	p.rt.markDirtyState(p.nodeID, key)
 	return true
 }
 
 func (p *stateProxy) Keys() []string {
-	p.rt.recordDep(p.nodeID)
-
 	state := p.rt.getOrCreateState(p.nodeID)
 	keys := state.Keys()
 	if keys == nil {

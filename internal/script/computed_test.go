@@ -145,6 +145,35 @@ func TestEvalComputedReEvalOnChange(t *testing.T) {
 	}
 }
 
+func TestEvalComputedReEvalOnCurrentNodePropChange(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	child2 := rt.tree.Find("child2")
+	child2.Computed["text"] = `return "self:" + $.value`
+
+	val, err := rt.EvalComputed("child2", "text", child2.Computed["text"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	child2.SetProp("text", val)
+
+	child2.SetProp("value", "updated")
+
+	rt.mu.Lock()
+	rt.dirty = map[string]bool{"child2": true}
+	rt.mu.Unlock()
+
+	err = rt.PropagateChanges()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v, _ := child2.GetProp("text")
+	if v != "self:updated" {
+		t.Errorf("after propagation: expected 'self:updated', got %v", v)
+	}
+}
+
 func TestEvalComputedReEvalOnStateChange(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 

@@ -82,6 +82,7 @@ func TestAgentBuildsDemoAppOverBridgeAndTUIWorks(t *testing.T) {
 					"props": map[string]any{
 						"auto_scroll": true,
 						"max_lines":   50,
+						"focusable":   false,
 					},
 				},
 			},
@@ -292,6 +293,7 @@ func TestAgentIteratesOnMultiStepDemoScenarioOverBridge(t *testing.T) {
 					"props": map[string]any{
 						"auto_scroll": true,
 						"max_lines":   2,
+						"focusable":   false,
 					},
 				},
 			},

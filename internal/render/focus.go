@@ -11,6 +11,8 @@ var focusableTypes = map[dom.NodeType]bool{
 	dom.TypeTable:    true,
 	dom.TypeList:     true,
 	dom.TypeDiff:     true,
+	dom.TypeLog:      true,
+	dom.TypeCode:     true,
 }
 
 // FocusRing maintains an ordered list of focusable node IDs.
@@ -42,7 +44,22 @@ func isFocusable(n *dom.Node) bool {
 			return b
 		}
 	}
+	if n.Type == dom.TypeContainer && isScrollContainer(n) {
+		return true
+	}
 	return focusableTypes[n.Type]
+}
+
+func isScrollContainer(n *dom.Node) bool {
+	if n.Type != dom.TypeContainer {
+		return false
+	}
+	if overflow, ok := n.GetProp("overflow"); !ok || overflow != "scroll" {
+		return false
+	}
+	_, hasHeight := n.GetProp("height")
+	_, hasMaxHeight := n.GetProp("max_height")
+	return hasHeight || hasMaxHeight
 }
 
 // Contains returns true if the given ID is in the focus ring.

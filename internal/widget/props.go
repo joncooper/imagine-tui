@@ -1,6 +1,9 @@
 package widget
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
 
@@ -91,4 +94,44 @@ func PropMapSlice(node *dom.Node, key string) []map[string]any {
 func stringFromMap(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
+}
+
+// PropSize resolves an integer or percentage-valued prop against available.
+// Returns false when the prop is missing, invalid, or cannot be resolved.
+func PropSize(node *dom.Node, key string, available int) (int, bool) {
+	v, ok := node.GetProp(key)
+	if !ok {
+		return 0, false
+	}
+	return ResolveSize(v, available)
+}
+
+// ResolveSize resolves an absolute or percentage value against available.
+func ResolveSize(v any, available int) (int, bool) {
+	switch val := v.(type) {
+	case int:
+		if val < 0 {
+			return 0, true
+		}
+		return val, true
+	case float64:
+		if val < 0 {
+			return 0, true
+		}
+		return int(val), true
+	case string:
+		if !strings.HasSuffix(val, "%") || available <= 0 {
+			return 0, false
+		}
+		pct, err := strconv.Atoi(strings.TrimSuffix(val, "%"))
+		if err != nil {
+			return 0, false
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		return available * pct / 100, true
+	default:
+		return 0, false
+	}
 }

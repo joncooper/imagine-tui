@@ -135,6 +135,18 @@ func (s *Server) Snapshots() *dom.SnapshotStore {
 	return s.snaps
 }
 
+// Lock acquires an exclusive write lock on the server's state. Use this when
+// the BubbleTea goroutine needs to write to the DOM (e.g. widget SetProp) while
+// MCP mutations may be running concurrently.
+func (s *Server) Lock() {
+	s.mu.Lock()
+}
+
+// Unlock releases the write lock.
+func (s *Server) Unlock() {
+	s.mu.Unlock()
+}
+
 // RLock acquires a read lock on the server's state. Use this when reading
 // the DOM tree from a goroutine that may run concurrently with MCP mutations.
 func (s *Server) RLock() {

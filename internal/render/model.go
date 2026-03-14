@@ -54,7 +54,12 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update implements tea.Model. Routes messages to the appropriate handler.
+// Acquires the server's write lock for the duration of the update to serialize
+// with concurrent MCP handler goroutines that also mutate the DOM under Lock.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.server.Lock()
+	defer m.server.Unlock()
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.logger.Info("window resize", "width", msg.Width, "height", msg.Height)
@@ -147,9 +152,8 @@ func (m Model) View() string {
 }
 
 // syncState synchronizes the widget tree and focus ring with the current DOM.
+// Callers must hold the server's Lock or RLock.
 func (m *Model) syncState() {
-	m.server.RLock()
-	defer m.server.RUnlock()
 	tree := m.server.Tree()
 	m.logger.Debug("syncState", "root_children", len(tree.Root.Children),
 		"tree_summary", tree.Summary())
@@ -160,37 +164,34 @@ func (m *Model) syncState() {
 	m.logger.Debug("focus ring built", "size", len(m.focus.IDs), "ids", m.focus.IDs)
 }
 
-// handleKey processes keyboard input. Acquires a read lock on the server to
-// protect against concurrent MCP mutations while reading the DOM tree.
+// handleKey processes keyboard input. Must be called under the server's Lock
+// (held by Update).
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.server.Shutdown()
 		return m, tea.Quit
 
+	case tea.KeyTab:
+		oldFocus := m.focusedID
+		m.focusedID = m.focusTab(true)
+		m.logger.Info("tab focus", "new_focus", m.focusedID)
+		m.runFocusHooks(oldFocus, m.focusedID)
+		return m, nil
+
+	case tea.KeyShiftTab:
+		oldFocus := m.focusedID
+		m.focusedID = m.focusTab(false)
+		m.logger.Info("shift-tab focus", "new_focus", m.focusedID)
+		m.runFocusHooks(oldFocus, m.focusedID)
+		return m, nil
+
 	default:
-		switch msg.Type {
-		case tea.KeyTab:
-			oldFocus := m.focusedID
-			m.focusedID = m.focusTab(true)
-			m.logger.Info("tab focus", "new_focus", m.focusedID)
-			m.runFocusHooks(oldFocus, m.focusedID)
-			return m, nil
-
-		case tea.KeyShiftTab:
-			oldFocus := m.focusedID
-			m.focusedID = m.focusTab(false)
-			m.logger.Info("shift-tab focus", "new_focus", m.focusedID)
-			m.runFocusHooks(oldFocus, m.focusedID)
-			return m, nil
-
-		default:
-			// Route to focused widget.
-			if m.focusedID != "" {
-				return m.routeKeyToWidget(msg)
-			}
-			return m, nil
+		// Route to focused widget.
+		if m.focusedID != "" {
+			return m.routeKeyToWidget(msg)
 		}
+		return m, nil
 	}
 }
 

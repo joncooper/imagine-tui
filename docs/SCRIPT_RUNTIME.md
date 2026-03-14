@@ -12,7 +12,7 @@ The script package currently contains only `doc.go` and a trivial goja import te
 
 **$ is both an object and a function.** Use goja's `ProxyTrapConfig` wrapping a callable function: `Get`/`Set` traps delegate to a `nodeProxy` for property access (`$.value`), while the `Apply` trap handles `$('id')` lookups. Cross-node proxies returned by `$('id')` are plain `DynamicObject`s.
 
-**Scripts mutate the DOM directly.** Write operations on `$` proxies call `node.SetProp()` and mark the node dirty. `emit('local', ops)` calls `tree.Patch()` synchronously. `emit('claude', data)` calls `events.Enqueue()`. After each script execution, dirty nodes trigger computed prop re-evaluation via the dependency graph.
+**Scripts mutate the DOM directly.** Write operations on `$` proxies call `node.SetProp()` and mark the node dirty. `emit('local', ops)` calls `tree.Patch()` synchronously. `emit('agent', data)` calls `events.Enqueue()`. After each script execution, dirty nodes trigger computed prop re-evaluation via the dependency graph.
 
 ## File Layout
 
@@ -20,7 +20,7 @@ The script package currently contains only `doc.go` and a trivial goja import te
 internal/script/
 ├── runtime.go     — Runtime struct, New(), initSandbox(), execScript(), timeout
 ├── proxy.go       — nodeProxy (DynamicObject), setupContext() with ProxyTrapConfig
-├── emit.go        — makeEmitFn(): local -> tree.Patch(), claude -> events.Enqueue()
+├── emit.go        — makeEmitFn(): local -> tree.Patch(), agent -> events.Enqueue()
 ├── state.go       — per-node state map[string]*goja.Object, getOrCreate/remove
 ├── hooks.go       — ExecHook(), NotifyMount/Remove/Change, public API
 ├── computed.go    — DepGraph (forward+reverse maps), EvalComputed(), propagateChanges(), cycle detection
@@ -118,11 +118,11 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error
 
 - [x] `makeEmitFn(sourceNodeID)` returns a Go function exposed to JS
 - [x] `emit('local', [...ops])`: marshal JS value → JSON → `dom.ParsePatchOps()` → `tree.Patch()`
-- [x] `emit('claude', {data})`: build `dom.Event{Type: "script", Source: nodeID, Data: data}` → `events.Enqueue()`
+- [x] `emit('agent', {data})`: build `dom.Event{Type: "script", Source: nodeID, Data: data}` → `events.Enqueue()`
 - [x] Invalid target → JS TypeError via `panic(rt.vm.NewTypeError(...))`
 - [x] Test: `emit('local', [{op:'update', id:'x', props:{text:'hi'}}])` applies patch to tree
 - [x] Test: `emit('local', invalidOps)` throws
-- [x] Test: `emit('claude', {action:'submit'})` enqueues event with correct source/data
+- [x] Test: `emit('agent', {action:'submit'})` enqueues event with correct source/data
 - [x] Test: `emit('bad', {})` throws TypeError
 
 ### Step 6: M3-6 — Script Lifecycle Hooks

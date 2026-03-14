@@ -1792,3 +1792,308 @@ func TestDescribeScripting_ReturnsSandboxInfo(t *testing.T) {
 		t.Error("sandbox should mention blocked 'require'")
 	}
 }
+
+// =============================================================================
+// Error handling and dynamic path coverage
+// =============================================================================
+
+func TestReplaceToolInvalidTreeJSON(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "replace", map[string]any{
+		"tree": "not-an-object",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid tree JSON")
+	}
+}
+
+func TestReplaceToolInvalidChildrenJSON(t *testing.T) {
+	e := setupWithTree(t)
+	r := e.call(t, "replace", map[string]any{
+		"target_id": "main",
+		"children":  "not-an-array",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid children JSON")
+	}
+}
+
+func TestReplaceToolReplaceTreeFailure(t *testing.T) {
+	e := setup(t)
+	// Duplicate IDs should cause ReplaceTree to fail.
+	r := e.call(t, "replace", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"children": []any{
+				map[string]any{"id": "dup", "type": "text"},
+				map[string]any{"id": "dup", "type": "text"},
+			},
+		},
+	})
+	if !r.IsError {
+		t.Error("expected error for duplicate IDs in tree")
+	}
+}
+
+func TestLayoutTool_MissingTree(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "layout", map[string]any{})
+	if !r.IsError {
+		t.Error("expected error for missing tree")
+	}
+}
+
+func TestLayoutTool_InvalidTreeJSON(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "layout", map[string]any{
+		"tree": "not-an-object",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid tree JSON")
+	}
+}
+
+func TestLayoutTool_DuplicateIDsFails(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"children": []any{
+				map[string]any{"id": "dup", "type": "text"},
+				map[string]any{"id": "dup", "type": "text"},
+			},
+		},
+	})
+	if !r.IsError {
+		t.Error("expected error for duplicate IDs")
+	}
+}
+
+func TestSetItemsTool_InvalidItemsJSON(t *testing.T) {
+	e := setup(t)
+	e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id": "root", "type": "container",
+			"children": []any{
+				map[string]any{"id": "mylist", "type": "list"},
+			},
+		},
+	})
+	r := e.call(t, "set_items", map[string]any{
+		"target": "mylist",
+		"items":  "not-an-array",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid items JSON")
+	}
+}
+
+func TestAppendItemsTool_MissingTarget(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "append_items", map[string]any{
+		"items": []any{map[string]any{"id": "a", "label": "A"}},
+	})
+	if !r.IsError {
+		t.Error("expected error for missing target")
+	}
+}
+
+func TestAppendItemsTool_InvalidItemsJSON(t *testing.T) {
+	e := setup(t)
+	e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id": "root", "type": "container",
+			"children": []any{
+				map[string]any{"id": "mylist", "type": "list"},
+			},
+		},
+	})
+	r := e.call(t, "append_items", map[string]any{
+		"target": "mylist",
+		"items":  "not-an-array",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid items JSON")
+	}
+}
+
+func TestAppendItemsTool_TargetNotFound(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "append_items", map[string]any{
+		"target": "nonexistent",
+		"items":  []any{map[string]any{"id": "a", "label": "A"}},
+	})
+	if !r.IsError {
+		t.Error("expected error for nonexistent target")
+	}
+}
+
+func TestRemoveItemsTool_MissingTarget(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "remove_items", map[string]any{
+		"keys": []any{"a"},
+	})
+	if !r.IsError {
+		t.Error("expected error for missing target")
+	}
+}
+
+func TestRemoveItemsTool_InvalidKeysJSON(t *testing.T) {
+	e := setup(t)
+	e.call(t, "layout", map[string]any{
+		"tree": map[string]any{
+			"id": "root", "type": "container",
+			"children": []any{
+				map[string]any{"id": "mylist", "type": "list"},
+			},
+		},
+	})
+	r := e.call(t, "remove_items", map[string]any{
+		"target": "mylist",
+		"keys":   "not-an-array",
+	})
+	if !r.IsError {
+		t.Error("expected error for invalid keys JSON")
+	}
+}
+
+func TestRemoveItemsTool_TargetNotFound(t *testing.T) {
+	e := setup(t)
+	r := e.call(t, "remove_items", map[string]any{
+		"target": "nonexistent",
+		"keys":   []any{"a"},
+	})
+	if !r.IsError {
+		t.Error("expected error for nonexistent target")
+	}
+}
+
+func TestToolsRejectBadUnmarshalArgs(t *testing.T) {
+	// Tools that parse structured input should return errors for malformed JSON args.
+	e := setup(t)
+
+	// Create a raw request with invalid JSON for the arguments field.
+	// We use CallTool via the MCP session with arguments that will fail
+	// struct unmarshaling (wrong types for known fields).
+	tools := []struct {
+		name string
+		args map[string]any
+	}{
+		{"patch", map[string]any{"ops": 42}},          // ops must be array
+		{"snapshot", map[string]any{"name": 42}},      // name must be string
+		{"restore", map[string]any{"name": 42}},       // name must be string
+		{"query", map[string]any{"ids": "not-array"}}, // ids must be array
+	}
+
+	for _, tc := range tools {
+		t.Run(tc.name, func(t *testing.T) {
+			r := e.call(t, tc.name, tc.args)
+			if !r.IsError {
+				t.Errorf("%s: expected error for bad args, got success: %s", tc.name, resultText(t, r))
+			}
+		})
+	}
+}
+
+func TestToolResponseStructSerialization(t *testing.T) {
+	// Verify that typed response structs serialize correctly and omit zero-value fields.
+	e := setup(t)
+
+	t.Run("patch_ok", func(t *testing.T) {
+		e2 := setupWithTree(t)
+		r := e2.call(t, "patch", map[string]any{
+			"ops": []any{map[string]any{
+				"op": "update", "id": "header",
+				"props": map[string]any{"text": "Updated"},
+			}},
+		})
+		m := resultMap(t, r)
+		if m["ok"] != true {
+			t.Error("expected ok: true")
+		}
+		// Should NOT have node_count, count, removed, etc.
+		if _, has := m["node_count"]; has {
+			t.Error("okResult should not include node_count")
+		}
+	})
+
+	t.Run("layout_with_node_count", func(t *testing.T) {
+		r := e.call(t, "layout", map[string]any{
+			"tree": map[string]any{
+				"id": "root", "type": "container",
+				"children": []any{
+					map[string]any{"id": "a", "type": "text"},
+					map[string]any{"id": "b", "type": "text"},
+				},
+			},
+		})
+		m := resultMap(t, r)
+		if m["ok"] != true {
+			t.Error("expected ok: true")
+		}
+		if m["node_count"].(float64) != 3 {
+			t.Errorf("expected node_count=3, got %v", m["node_count"])
+		}
+	})
+
+	t.Run("snapshot_with_name", func(t *testing.T) {
+		r := e.call(t, "snapshot", map[string]any{"name": "v1"})
+		m := resultMap(t, r)
+		if m["ok"] != true {
+			t.Error("expected ok: true")
+		}
+		if m["name"] != "v1" {
+			t.Errorf("expected name=v1, got %v", m["name"])
+		}
+	})
+
+	t.Run("restore_with_name", func(t *testing.T) {
+		r := e.call(t, "restore", map[string]any{"name": "v1"})
+		m := resultMap(t, r)
+		if m["ok"] != true {
+			t.Error("expected ok: true")
+		}
+		if m["restored"] != "v1" {
+			t.Errorf("expected restored=v1, got %v", m["restored"])
+		}
+	})
+
+	t.Run("timeout_result", func(t *testing.T) {
+		r := e.call(t, "await_event", map[string]any{"timeout_ms": 10})
+		m := resultMap(t, r)
+		if m["timeout"] != true {
+			t.Error("expected timeout: true")
+		}
+		if _, has := m["ok"]; has {
+			t.Error("timeout result should not have ok field")
+		}
+	})
+}
+
+func TestCallToolDirect(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("valid_tool", func(t *testing.T) {
+		r, err := s.CallTool(ctx, "describe_scripting", map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if r.IsError {
+			t.Error("unexpected tool error")
+		}
+	})
+
+	t.Run("unknown_tool", func(t *testing.T) {
+		_, err := s.CallTool(ctx, "nonexistent", map[string]any{})
+		if err == nil {
+			t.Error("expected error for unknown tool")
+		}
+	})
+}

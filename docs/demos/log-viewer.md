@@ -74,7 +74,7 @@ container (id: "root", direction: vertical)
 6. **Search input change** → `on_change` script filters entries matching the search term, updates log widget locally.
 
 ### Claude-routed interactions (1-3s round trip)
-7. **Select a log entry** (if supported) → `emit('claude', { line, severity, message })` → Claude explains the error, reads source files for context
+7. **Select a log entry** (if supported) → `emit('agent', { line, severity, message })` → Claude explains the error, reads source files for context
 8. Claude calls `patch` to insert an explanation panel below the log
 9. Back to `await_event`
 

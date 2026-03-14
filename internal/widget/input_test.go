@@ -137,6 +137,29 @@ func TestInputWidget_Update_ChangeEvent(t *testing.T) {
 	}
 }
 
+func TestInputWidget_Update_SpaceKey(t *testing.T) {
+	w := &InputWidget{}
+	n := inputNode(t, map[string]any{"value": "survey"})
+	w.Init(n)
+
+	result := w.Update(tea.KeyMsg{Type: tea.KeySpace}, n)
+	if !result.Consumed {
+		t.Error("expected space key to be consumed")
+	}
+	if w.value != "survey " {
+		t.Errorf("value = %q, want %q", w.value, "survey ")
+	}
+	if got, _ := n.GetProp("value"); got != "survey " {
+		t.Errorf("node prop value = %v, want %q", got, "survey ")
+	}
+	if len(result.Events) != 1 || result.Events[0].Type != "change" {
+		t.Fatalf("expected one change event, got %#v", result.Events)
+	}
+	if result.Events[0].Data["value"] != "survey " {
+		t.Errorf("change event value = %v, want %q", result.Events[0].Data["value"], "survey ")
+	}
+}
+
 func TestInputWidget_Validation_ValidPattern(t *testing.T) {
 	w := &InputWidget{}
 	n := inputNode(t, map[string]any{"value": "abc", "pattern": "^[a-z]+$"})

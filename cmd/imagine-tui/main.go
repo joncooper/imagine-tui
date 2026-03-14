@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -120,13 +121,14 @@ func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
 	mcpErrCh := make(chan error, 1)
 	go func() {
 		logger.Info("MCP server starting on stdio")
+		bridge.NotifyConnected(1)
 		err := srv.MCPServer().Run(ctx, &mcp.StdioTransport{})
 		mcpErrCh <- err
 		logger.Info("MCP stdio session ended", "error", err)
 		if err != nil && err != io.EOF {
-			bridge.NotifyDisconnected(err)
+			bridge.NotifyDisconnected(1, err)
 		} else {
-			bridge.NotifyDisconnected(nil)
+			bridge.NotifyDisconnected(1, nil)
 		}
 	}()
 
@@ -190,6 +192,7 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 	}()
 
 	// Accept MCP connections on the Unix socket.
+	owners := &ownerGate{}
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -198,7 +201,7 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 				return // listener closed
 			}
 			logger.Info("client connected", "remote", conn.RemoteAddr())
-			go handleConnection(ctx, srv, bridge, conn, logger)
+			go handleConnection(ctx, srv, bridge, owners, conn, logger)
 		}
 	}()
 
@@ -212,8 +215,41 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 	return err
 }
 
-func handleConnection(ctx context.Context, srv *imcp.Server, bridge *render.Bridge, conn net.Conn, logger *slog.Logger) {
+type ownerGate struct {
+	mu     sync.Mutex
+	next   uint64
+	active uint64
+}
+
+func (g *ownerGate) TryClaim() (uint64, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active != 0 {
+		return 0, false
+	}
+	g.next++
+	g.active = g.next
+	return g.active, true
+}
+
+func (g *ownerGate) Release(id uint64) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if id == 0 || g.active != id {
+		return false
+	}
+	g.active = 0
+	return true
+}
+
+func handleConnection(ctx context.Context, srv *imcp.Server, bridge *render.Bridge, owners *ownerGate, conn net.Conn, logger *slog.Logger) {
 	defer func() { _ = conn.Close() }()
+
+	sessionID, ok := owners.TryClaim()
+	if !ok {
+		logger.Warn("owner rejected", "remote", conn.RemoteAddr())
+		return
+	}
 
 	transport := &mcp.IOTransport{
 		Reader: conn,
@@ -222,17 +258,22 @@ func handleConnection(ctx context.Context, srv *imcp.Server, bridge *render.Brid
 
 	session, err := srv.MCPServer().Connect(ctx, transport, nil)
 	if err != nil {
+		owners.Release(sessionID)
 		logger.Error("MCP connect failed", "error", err)
 		return
 	}
 
-	bridge.NotifyConnected()
-	logger.Info("MCP session established")
+	bridge.NotifyConnected(sessionID)
+	if sessionID == 1 {
+		logger.Info("owner attached", "session_id", sessionID)
+	} else {
+		logger.Info("owner reattached", "session_id", sessionID)
+	}
 
 	err = session.Wait()
-	logger.Info("MCP session ended", "error", err)
-	if err != nil && err != io.EOF && err != context.Canceled {
-		bridge.NotifyDisconnected(err)
+	logger.Info("MCP session ended", "session_id", sessionID, "error", err)
+	if owners.Release(sessionID) {
+		bridge.NotifyDisconnected(sessionID, err)
 	}
 }
 

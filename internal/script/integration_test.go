@@ -40,7 +40,7 @@ func TestIntegrationFullStack(t *testing.T) {
 	btn, _ := dom.NewNode("submit_btn", dom.TypeButton)
 	btn.SetProp("label", "Submit")
 	// on_mount script emits to Claude.
-	btn.Scripts["on_mount"] = `emit('claude', {action: 'btn_ready'})`
+	btn.Scripts["on_mount"] = `emit('agent', {action: 'btn_ready'})`
 	_ = tree.Insert("form", btn, "")
 
 	events := dom.NewEventQueue()
@@ -56,7 +56,7 @@ func TestIntegrationFullStack(t *testing.T) {
 		t.Errorf("initial total: expected 'Total: $20', got %v", v)
 	}
 
-	// Step 2: Fire on_mount for submit button → should emit claude event.
+	// Step 2: Fire on_mount for submit button → should emit agent event.
 	err = rt.NotifyMount("submit_btn")
 	if err != nil {
 		t.Fatalf("NotifyMount: %v", err)

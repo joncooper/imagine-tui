@@ -258,11 +258,11 @@ func TestNotifyChangeNodeNotFound(t *testing.T) {
 	}
 }
 
-func TestExecHookEmitsClaude(t *testing.T) {
+func TestExecHookEmitsAgent(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 
 	node := rt.tree.Find("child1")
-	node.Scripts["on_mount"] = `emit('claude', {action: 'mounted'})`
+	node.Scripts["on_mount"] = `emit('agent', {action: 'mounted'})`
 
 	_, err := rt.ExecHook("child1", HookOnMount, nil)
 	if err != nil {
@@ -286,7 +286,7 @@ func TestExecHookEmitsClaude(t *testing.T) {
 func TestHookTypesAllValid(t *testing.T) {
 	// Verify all hook type constants are defined.
 	hooks := []HookType{
-		HookOnMount, HookOnChange, HookOnEvent,
+		HookOnMount, HookOnChange, HookOnSubmit, HookOnEvent,
 		HookOnFocus, HookOnBlur, HookOnKey,
 	}
 	for _, h := range hooks {

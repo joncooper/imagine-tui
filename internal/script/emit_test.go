@@ -85,11 +85,11 @@ func TestEmitLocalInsertNode(t *testing.T) {
 	}
 }
 
-func TestEmitClaudeEnqueuesEvent(t *testing.T) {
+func TestEmitAgentEnqueuesEvent(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 
 	err := rt.execScript("child1", "test", `
-		emit('claude', {action: 'submit', detail: 'test_data'})
+		emit('agent', {action: 'submit', detail: 'test_data'})
 	`, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +117,11 @@ func TestEmitClaudeEnqueuesEvent(t *testing.T) {
 	}
 }
 
-func TestEmitClaudeWithNestedData(t *testing.T) {
+func TestEmitAgentWithNestedData(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 
 	err := rt.execScript("root", "test", `
-		emit('claude', {items: [1, 2, 3], nested: {key: 'val'}})
+		emit('agent', {items: [1, 2, 3], nested: {key: 'val'}})
 	`, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +137,27 @@ func TestEmitClaudeWithNestedData(t *testing.T) {
 	items, ok := evt.Data["items"].([]any)
 	if !ok || len(items) != 3 {
 		t.Errorf("expected items=[1,2,3], got %v", evt.Data["items"])
+	}
+}
+
+func TestEmitClaudeAliasStillEnqueuesEvent(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	err := rt.execScript("child1", "test", `
+		emit('claude', {action: 'legacy'})
+	`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	evt, err := rt.events.Dequeue(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Data["action"] != "legacy" {
+		t.Errorf("expected legacy action, got %v", evt.Data["action"])
 	}
 }
 

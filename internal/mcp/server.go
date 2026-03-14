@@ -74,7 +74,8 @@ const serverInstructions = `imagine-tui is an MCP server that renders interactiv
 
 ## Widget overview
 Widgets include: container (layout), text, list (navigable with up/down/enter),
-table (sortable, expandable rows), button, input, textarea, select, code, log, diff.
+table (sortable, expandable rows), button, input, textarea, select, code, log,
+diff, progress, spinner, markdown, and sparkline.
 Call describe_widgets for full details on any widget type.
 
 ## Data pattern

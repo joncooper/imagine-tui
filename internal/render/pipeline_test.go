@@ -206,25 +206,27 @@ func TestRenderPipeline(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown_widget_type_does_not_blank_siblings", func(t *testing.T) {
+	t.Run("progress_widget_renders_between_siblings", func(t *testing.T) {
 		m, srv := setupPipeline(t)
-		// "progress" is a valid DOM type but not in DefaultRegistry.
 		m = replaceTree(t, m, srv, map[string]any{
 			"id":   "root",
 			"type": "container",
 			"children": []map[string]any{
 				{"id": "before", "type": "text", "props": map[string]any{"content": "Visible Before"}},
-				{"id": "unknown", "type": "progress", "props": map[string]any{"value": 50}},
+				{"id": "progress", "type": "progress", "props": map[string]any{"label": "Loading", "value": 50}},
 				{"id": "after", "type": "text", "props": map[string]any{"content": "Visible After"}},
 			},
 		})
 
 		view := m.View()
 		if !strings.Contains(view, "Visible Before") {
-			t.Errorf("expected 'Visible Before' despite unknown sibling, got:\n%s", view)
+			t.Errorf("expected 'Visible Before' with progress widget present, got:\n%s", view)
 		}
 		if !strings.Contains(view, "Visible After") {
-			t.Errorf("expected 'Visible After' despite unknown sibling, got:\n%s", view)
+			t.Errorf("expected 'Visible After' with progress widget present, got:\n%s", view)
+		}
+		if !strings.Contains(view, "Loading") {
+			t.Errorf("expected progress widget label in output, got:\n%s", view)
 		}
 	})
 

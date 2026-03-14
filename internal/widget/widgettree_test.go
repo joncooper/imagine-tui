@@ -3,6 +3,7 @@ package widget
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
 
@@ -130,4 +131,50 @@ func TestTree_Get_Nonexistent(t *testing.T) {
 	if wt.Get("nonexistent") != nil {
 		t.Error("expected nil for nonexistent widget")
 	}
+}
+
+func TestTree_Commands_WrapsNodeScopedCommands(t *testing.T) {
+	r := NewRegistry()
+	r.Register(dom.TypeProgress, func() Widget {
+		return &commandStubWidget{
+			command: func() tea.Msg { return "tick" },
+		}
+	})
+
+	root, _ := dom.NewNode("progress", dom.TypeProgress)
+	tree, _ := dom.NewTree(root)
+
+	wt := NewTree(r)
+	if err := wt.Sync(tree); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	cmds := wt.Commands(tree)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+
+	msg := cmds[0]()
+	scoped, ok := msg.(CommandMsg)
+	if !ok {
+		t.Fatalf("expected CommandMsg, got %T", msg)
+	}
+	if scoped.NodeID != "progress" {
+		t.Fatalf("NodeID = %q, want %q", scoped.NodeID, "progress")
+	}
+	if scoped.Msg != tea.Msg("tick") {
+		t.Fatalf("Msg = %#v, want %#v", scoped.Msg, tea.Msg("tick"))
+	}
+}
+
+type commandStubWidget struct {
+	stubWidget
+	command func() tea.Msg
+}
+
+func (w *commandStubWidget) Command(_ *dom.Node) tea.Cmd {
+	if w.command == nil {
+		return nil
+	}
+	return w.command
 }

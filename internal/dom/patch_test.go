@@ -530,7 +530,7 @@ func TestPatchInsertSpecWithScriptsAndComputed(t *testing.T) {
 func TestPatchInsertInvalidType(t *testing.T) {
 	tree := makeTestTree(t)
 	err := tree.Patch([]PatchOp{
-		{Op: OpInsert, ParentID: "root", ID: "bad", NodeType: "sparkline"},
+		{Op: OpInsert, ParentID: "root", ID: "bad", NodeType: "chart"},
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid type")
@@ -541,7 +541,7 @@ func TestPatchInsertSpecInvalidType(t *testing.T) {
 	tree := makeTestTree(t)
 	err := tree.Patch([]PatchOp{
 		{Op: OpInsert, ParentID: "root", Node: &NodeSpec{
-			ID: "bad", Type: "sparkline",
+			ID: "bad", Type: "chart",
 		}},
 	})
 	if err == nil {

@@ -33,6 +33,7 @@ type Widget interface {
 type UpdateResult struct {
 	Consumed bool    // true if the event was handled (stop bubbling)
 	Events   []Event // events produced (routed by the runtime)
+	Cmd      tea.Cmd // optional follow-up command scoped to the current node
 }
 
 // Event is an event produced by a widget during Update.
@@ -40,6 +41,36 @@ type Event struct {
 	Type   string         // "change", "submit", "click", "select", etc.
 	NodeID string         // source node ID
 	Data   map[string]any // event payload
+}
+
+// Commander is implemented by widgets that need to schedule asynchronous
+// BubbleTea commands outside direct user input handling.
+type Commander interface {
+	Command(node *dom.Node) tea.Cmd
+}
+
+// CommandMsg wraps a BubbleTea message with the owning DOM node ID so the
+// render loop can route it back to the correct widget instance.
+type CommandMsg struct {
+	NodeID string
+	Msg    tea.Msg
+}
+
+// WrapCmd scopes a command result to a specific node.
+func WrapCmd(nodeID string, cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg := cmd()
+		if msg == nil {
+			return nil
+		}
+		return CommandMsg{
+			NodeID: nodeID,
+			Msg:    msg,
+		}
+	}
 }
 
 // ViewContext provides rendering context to a widget's View method.

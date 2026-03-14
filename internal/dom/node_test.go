@@ -16,12 +16,15 @@ func TestNewNode(t *testing.T) {
 		{name: "valid text", id: "header", nodeType: TypeText},
 		{name: "valid input", id: "search_input", nodeType: TypeInput},
 		{name: "valid button", id: "submit-btn", nodeType: TypeButton},
+		{name: "valid spinner", id: "status_spinner", nodeType: TypeSpinner},
+		{name: "valid markdown", id: "readme", nodeType: TypeMarkdown},
+		{name: "valid sparkline", id: "trend", nodeType: TypeSparkline},
 		{name: "valid with dots", id: "section.1", nodeType: TypeContainer},
 		{name: "empty ID", id: "", nodeType: TypeContainer, wantErr: true, errMsg: "must not be empty"},
 		{name: "whitespace in ID", id: "bad id", nodeType: TypeContainer, wantErr: true, errMsg: "must not contain whitespace"},
 		{name: "tab in ID", id: "bad\tid", nodeType: TypeContainer, wantErr: true, errMsg: "must not contain whitespace"},
 		{name: "newline in ID", id: "bad\nid", nodeType: TypeContainer, wantErr: true, errMsg: "must not contain whitespace"},
-		{name: "unknown type", id: "node1", nodeType: "sparkline", wantErr: true, errMsg: "unknown type"},
+		{name: "unknown type", id: "node1", nodeType: "chart", wantErr: true, errMsg: "unknown type"},
 		{name: "empty type", id: "node1", nodeType: "", wantErr: true, errMsg: "unknown type"},
 	}
 
@@ -136,13 +139,14 @@ func TestIsValidType(t *testing.T) {
 	t.Parallel()
 	valid := []NodeType{TypeContainer, TypeText, TypeInput, TypeTextarea, TypeSelect,
 		TypeButton, TypeTable, TypeList, TypeDiff, TypeLog, TypeCode,
-		TypeTabs, TypeProgress, TypeTree, TypeModal, TypeForm}
+		TypeTabs, TypeProgress, TypeSpinner, TypeMarkdown, TypeSparkline,
+		TypeTree, TypeModal, TypeForm}
 	for _, vt := range valid {
 		if !IsValidType(vt) {
 			t.Errorf("expected %q to be valid", vt)
 		}
 	}
-	invalid := []NodeType{"", "sparkline", "custom", "div"}
+	invalid := []NodeType{"", "chart", "custom", "div"}
 	for _, ivt := range invalid {
 		if IsValidType(ivt) {
 			t.Errorf("expected %q to be invalid", ivt)

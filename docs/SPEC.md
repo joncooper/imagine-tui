@@ -247,7 +247,9 @@ These are required for the launch demos. All seven reference demos depend on thi
 
 ### Extended types (v2)
 - **tabs** — tab bar + content panels
-- **progress** — progress bar / spinner
+- **progress** — progress bar / gauge
+- **spinner** — animated loading indicator
+- **markdown** — rendered markdown content via glamour
 - **sparkline** — inline data visualization (may promote to v1 if dashboard demo is prioritized)
 - **tree** — collapsible tree view with status badges per node. Required by: migration pilot (file tree).
 - **modal** — overlay container

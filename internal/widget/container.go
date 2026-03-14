@@ -4,20 +4,52 @@ import (
 	"strconv"
 	"strings"
 
+	bviewport "github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
 
 // ContainerWidget implements flex-like layout with vertical/horizontal direction.
-type ContainerWidget struct{}
+type ContainerWidget struct {
+	vp      bviewport.Model
+	vpReady bool
+}
 
 // Init implements Widget.
-func (w *ContainerWidget) Init(_ *dom.Node) {}
+func (w *ContainerWidget) Init(_ *dom.Node) {
+	w.vp = bviewport.New(0, 0)
+}
 
 // Update implements Widget.
-func (w *ContainerWidget) Update(_ tea.Msg, _ *dom.Node) UpdateResult {
-	return UpdateResult{}
+func (w *ContainerWidget) Update(msg tea.Msg, node *dom.Node) UpdateResult {
+	if !w.vpReady || PropString(node, "overflow", "") != "scroll" {
+		return UpdateResult{}
+	}
+
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return UpdateResult{}
+	}
+
+	switch keyMsg.Type {
+	case tea.KeyDown:
+		w.vp.ScrollDown(1)
+	case tea.KeyUp:
+		w.vp.ScrollUp(1)
+	case tea.KeyPgDown:
+		w.vp.PageDown()
+	case tea.KeyPgUp:
+		w.vp.PageUp()
+	case tea.KeyHome:
+		w.vp.GotoTop()
+	case tea.KeyEnd:
+		w.vp.GotoBottom()
+	default:
+		return UpdateResult{}
+	}
+
+	return UpdateResult{Consumed: true}
 }
 
 // Layout implements Widget.
@@ -181,10 +213,86 @@ func (w *ContainerWidget) View(node *dom.Node, children []RenderedChild, ctx Vie
 		style = mergeStyles(style, tokenStyle)
 	}
 
+	height, hasHeight := PropSize(node, "height", ctx.Height)
+	maxHeight, hasMaxHeight := PropSize(node, "max_height", ctx.Height)
+	if hasHeight {
+		style = style.Height(height)
+	}
+	if hasMaxHeight && !hasHeight {
+		style = style.MaxHeight(maxHeight)
+	}
+
+	if PropString(node, "overflow", "") == "scroll" {
+		if inner, ok := w.viewportContent(node, composed, ctx.Width, height, hasHeight, maxHeight, hasMaxHeight); ok {
+			composed = inner
+		}
+	} else {
+		w.vpReady = false
+	}
+
 	if composed == "" {
 		return style.Render("")
 	}
 	return style.Render(composed)
+}
+
+func (w *ContainerWidget) viewportContent(node *dom.Node, composed string, width, height int, hasHeight bool, maxHeight int, hasMaxHeight bool) (string, bool) {
+	padding := PropInt(node, "padding", 0)
+	borderName := PropString(node, "border", "none")
+
+	var outerHeight int
+	switch {
+	case hasHeight:
+		outerHeight = height
+	case hasMaxHeight:
+		outerHeight = maxHeight
+	default:
+		w.vpReady = false
+		return "", false
+	}
+
+	innerWidth := width - 2*padding - borderWidth(borderName)
+	innerHeight := outerHeight - 2*padding - borderHeight(borderName)
+	if innerWidth <= 0 || innerHeight <= 0 {
+		w.vpReady = false
+		return "", false
+	}
+
+	attachViewport := hasHeight
+	if !attachViewport && hasMaxHeight {
+		attachViewport = lineCount(composed) > innerHeight
+	}
+	if !attachViewport {
+		w.vpReady = false
+		return "", false
+	}
+
+	w.vp.Width = innerWidth
+	w.vp.Height = innerHeight
+	w.vp.SetContent(composed)
+	clampViewport(&w.vp)
+	w.vpReady = true
+	return w.vp.View(), true
+}
+
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func clampViewport(vp *bviewport.Model) {
+	maxOffset := vp.TotalLineCount() - vp.Height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if vp.YOffset > maxOffset {
+		vp.SetYOffset(maxOffset)
+	}
+	if vp.YOffset < 0 {
+		vp.SetYOffset(0)
+	}
 }
 
 func joinHorizontal(views []string, gap int) string {

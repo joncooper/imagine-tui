@@ -159,3 +159,106 @@ func TestRenderRunsOnKeyScriptsWithoutButtonClickFallback(t *testing.T) {
 		t.Errorf("expected no fallback click event, got: %s", text)
 	}
 }
+
+func TestRenderRunsTimerCallbacksViaTick(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+
+	callTool(t, srv, "replace", map[string]any{
+		"tree": map[string]any{
+			"id":      "root",
+			"type":    "container",
+			"scripts": map[string]any{"on_mount": "setTimeout(function() { $('status').text = 'done'; }, 1)"},
+			"children": []any{
+				map[string]any{
+					"id":    "status",
+					"type":  "text",
+					"props": map[string]any{"text": "idle"},
+				},
+			},
+		},
+	})
+
+	newM, cmd := m.Update(DOMChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected DOMChangedMsg to schedule a timer tick")
+	}
+
+	timerMsg := cmd()
+	if _, ok := timerMsg.(scriptTimerMsg); !ok {
+		t.Fatalf("expected scriptTimerMsg, got %T", timerMsg)
+	}
+
+	model := newM.(Model)
+	newM2, _ := model.Update(timerMsg)
+	view := newM2.(Model).View()
+	if !strings.Contains(view, "done") {
+		t.Errorf("timer callback did not update view, got:\n%s", view)
+	}
+}
+
+func TestRenderCancelsTimersWhenOwnerNodeRemoved(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+
+	callTool(t, srv, "replace", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"children": []any{
+				map[string]any{
+					"id":    "status",
+					"type":  "text",
+					"props": map[string]any{"text": "idle"},
+				},
+				map[string]any{
+					"id":      "countdown",
+					"type":    "text",
+					"scripts": map[string]any{"on_mount": "setTimeout(function() { $('status').text = 'boom'; }, 10)"},
+				},
+			},
+		},
+	})
+
+	newM, cmd := m.Update(DOMChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected DOMChangedMsg to schedule a timer tick")
+	}
+	model := newM.(Model)
+
+	callTool(t, srv, "patch", map[string]any{
+		"ops": []map[string]any{
+			{
+				"op": "remove",
+				"id": "countdown",
+			},
+		},
+	})
+
+	newM2, _ := model.Update(DOMChangedMsg{})
+	model2 := newM2.(Model)
+
+	timerMsg := cmd()
+	newM3, _ := model2.Update(timerMsg)
+	view := newM3.(Model).View()
+	if strings.Contains(view, "boom") {
+		t.Errorf("removed node timer should not have fired, got:\n%s", view)
+	}
+	if !strings.Contains(view, "idle") {
+		t.Errorf("expected status to remain idle, got:\n%s", view)
+	}
+}

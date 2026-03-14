@@ -61,6 +61,7 @@ func (rt *Runtime) NotifyMount(nodeID string) error {
 func (rt *Runtime) NotifyRemove(nodeID string) {
 	rt.removeState(nodeID)
 	rt.mu.Lock()
+	rt.clearNodeTimersLocked(nodeID)
 	rt.deps.RemoveNode(nodeID)
 	rt.mu.Unlock()
 }

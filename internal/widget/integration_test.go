@@ -12,7 +12,8 @@ func TestDefaultRegistry_AllV1Types(t *testing.T) {
 	v1Types := []dom.NodeType{
 		dom.TypeContainer, dom.TypeText, dom.TypeInput, dom.TypeTextarea,
 		dom.TypeSelect, dom.TypeButton, dom.TypeTable, dom.TypeList,
-		dom.TypeDiff, dom.TypeLog, dom.TypeCode,
+		dom.TypeDiff, dom.TypeLog, dom.TypeCode, dom.TypeProgress, dom.TypeSpinner,
+		dom.TypeMarkdown, dom.TypeSparkline,
 	}
 	for _, nt := range v1Types {
 		if !r.Has(nt) {

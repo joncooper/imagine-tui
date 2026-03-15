@@ -174,6 +174,53 @@ func Catalog() []Info {
 			Scrollable: true,
 		},
 		{
+			Type:        "progress",
+			Description: "Progress bar with an optional label and percentage display.",
+			Props: []PropInfo{
+				{Name: "value", Type: "int", Description: "Progress percentage from 0 to 100"},
+				{Name: "label", Type: "string", Description: "Optional label rendered before the bar"},
+				{Name: "show_percent", Type: "bool", Description: "Show the numeric percentage", Default: true},
+				{Name: "style", Type: "string", Description: "Theme token for label styling and bar color selection"},
+			},
+			Focusable:  false,
+			Scrollable: false,
+		},
+		{
+			Type:        "spinner",
+			Description: "Animated spinner using Bubble Tea's spinner component.",
+			Props: []PropInfo{
+				{Name: "label", Type: "string", Description: "Optional label rendered after the spinner"},
+				{Name: "active", Type: "bool", Description: "Whether the spinner is animating", Default: true},
+				{Name: "spinner", Type: "string", Description: "Preset spinner style: \"line\", \"dot\", \"mini_dot\", \"jump\", \"pulse\", \"points\", \"globe\", \"moon\", \"monkey\", \"meter\", \"hamburger\", or \"ellipsis\"", Default: "line"},
+				{Name: "style", Type: "string", Description: "Theme token applied to the spinner output"},
+			},
+			Focusable:  false,
+			Scrollable: false,
+		},
+		{
+			Type:        "markdown",
+			Description: "Rendered markdown content using glamour styling.",
+			Props: []PropInfo{
+				{Name: "content", Type: "string", Description: "Markdown source text"},
+				{Name: "theme", Type: "string", Description: "Glamour theme: \"ascii\", \"dark\", \"light\", or \"notty\"", Default: "ascii"},
+			},
+			Focusable:  false,
+			Scrollable: false,
+		},
+		{
+			Type:        "sparkline",
+			Description: "Compact inline trend line rendered from numeric values.",
+			Props: []PropInfo{
+				{Name: "values", Type: "array", Description: "Numeric series to render"},
+				{Name: "label", Type: "string", Description: "Optional label rendered before the sparkline"},
+				{Name: "min", Type: "int", Description: "Optional lower bound for scaling"},
+				{Name: "max", Type: "int", Description: "Optional upper bound for scaling"},
+				{Name: "style", Type: "string", Description: "Theme token applied to the rendered output"},
+			},
+			Focusable:  false,
+			Scrollable: false,
+		},
+		{
 			Type:        "diff",
 			Description: "Unified or split diff viewer with hunk navigation.",
 			Props: []PropInfo{

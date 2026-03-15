@@ -14,7 +14,8 @@ func TestCatalogCoversRegisteredTypes(t *testing.T) {
 	coreTypes := []dom.NodeType{
 		dom.TypeContainer, dom.TypeText, dom.TypeInput, dom.TypeTextarea,
 		dom.TypeSelect, dom.TypeButton, dom.TypeTable, dom.TypeList,
-		dom.TypeDiff, dom.TypeLog, dom.TypeCode,
+		dom.TypeDiff, dom.TypeLog, dom.TypeCode, dom.TypeProgress, dom.TypeSpinner,
+		dom.TypeMarkdown, dom.TypeSparkline,
 	}
 
 	for _, nt := range coreTypes {

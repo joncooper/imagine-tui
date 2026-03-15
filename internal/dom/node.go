@@ -25,11 +25,14 @@ const (
 
 // v2 extended types.
 const (
-	TypeTabs     NodeType = "tabs"
-	TypeProgress NodeType = "progress"
-	TypeTree     NodeType = "tree"
-	TypeModal    NodeType = "modal"
-	TypeForm     NodeType = "form"
+	TypeTabs      NodeType = "tabs"
+	TypeProgress  NodeType = "progress"
+	TypeSpinner   NodeType = "spinner"
+	TypeMarkdown  NodeType = "markdown"
+	TypeSparkline NodeType = "sparkline"
+	TypeTree      NodeType = "tree"
+	TypeModal     NodeType = "modal"
+	TypeForm      NodeType = "form"
 )
 
 // validTypes is the registry of known node types.
@@ -47,6 +50,9 @@ var validTypes = map[NodeType]bool{
 	TypeCode:      true,
 	TypeTabs:      true,
 	TypeProgress:  true,
+	TypeSpinner:   true,
+	TypeMarkdown:  true,
+	TypeSparkline: true,
 	TypeTree:      true,
 	TypeModal:     true,
 	TypeForm:      true,

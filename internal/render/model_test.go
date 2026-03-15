@@ -360,3 +360,194 @@ func TestModelSyncCreatesWidgetInstances(t *testing.T) {
 		t.Error("expected widget instance for 'submit_btn'")
 	}
 }
+
+func TestModelRoutesWidgetCommandMsgs(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := dom.NewNode("progress", dom.TypeProgress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Tree().Insert("root", progress, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	testWidget := &commandRoutingWidget{initialCmds: 1, chainedCmds: 1}
+	registry := widget.NewRegistry()
+	registry.Register(dom.TypeContainer, func() widget.Widget { return &widgetStub{} })
+	registry.Register(dom.TypeProgress, func() widget.Widget { return testWidget })
+
+	m := NewModel(srv, registry)
+	m.width = 80
+	m.height = 24
+
+	_, cmd := m.Update(DOMChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected DOMChangedMsg to schedule a widget command")
+	}
+
+	firstMsg := cmd()
+	scoped, ok := firstMsg.(widget.CommandMsg)
+	if !ok {
+		t.Fatalf("expected widget.CommandMsg, got %T", firstMsg)
+	}
+	if scoped.NodeID != "progress" {
+		t.Fatalf("NodeID = %q, want %q", scoped.NodeID, "progress")
+	}
+
+	newM, nextCmd := m.Update(firstMsg)
+	model := newM.(Model)
+	if len(testWidget.seenMsgs) != 1 {
+		t.Fatalf("widget saw %d msgs, want 1", len(testWidget.seenMsgs))
+	}
+	if _, ok := testWidget.seenMsgs[0].(commandTickMsg); !ok {
+		t.Fatalf("widget saw %T, want commandTickMsg", testWidget.seenMsgs[0])
+	}
+	if nextCmd == nil {
+		t.Fatal("expected chained widget command")
+	}
+
+	secondMsg := nextCmd()
+	if _, ok := secondMsg.(widget.CommandMsg); !ok {
+		t.Fatalf("expected widget.CommandMsg, got %T", secondMsg)
+	}
+
+	newM, finalCmd := model.Update(secondMsg)
+	_ = newM.(Model)
+	if finalCmd != nil {
+		t.Fatal("expected chained commands to stop after second tick")
+	}
+	if len(testWidget.seenMsgs) != 2 {
+		t.Fatalf("widget saw %d msgs, want 2", len(testWidget.seenMsgs))
+	}
+}
+
+func TestModelIgnoresStaleWidgetCommandMsgs(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := dom.NewNode("progress", dom.TypeProgress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Tree().Insert("root", progress, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	testWidget := &commandRoutingWidget{initialCmds: 1}
+	registry := widget.NewRegistry()
+	registry.Register(dom.TypeContainer, func() widget.Widget { return &widgetStub{} })
+	registry.Register(dom.TypeProgress, func() widget.Widget { return testWidget })
+
+	m := NewModel(srv, registry)
+	m.width = 80
+	m.height = 24
+
+	_, cmd := m.Update(DOMChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected DOMChangedMsg to schedule a widget command")
+	}
+
+	staleMsg := cmd()
+	if _, err := srv.Tree().Remove("progress"); err != nil {
+		t.Fatal(err)
+	}
+	m.syncState()
+
+	newM, nextCmd := m.Update(staleMsg)
+	_ = newM.(Model)
+	if nextCmd != nil {
+		t.Fatal("expected stale widget command to produce no follow-up command")
+	}
+	if len(testWidget.seenMsgs) != 0 {
+		t.Fatalf("stale widget command should be ignored, saw %d msgs", len(testWidget.seenMsgs))
+	}
+}
+
+func TestModelSpinnerSchedulesInitialTick(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spinnerNode, err := dom.NewNode("spinner", dom.TypeSpinner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spinnerNode.SetProp("label", "Loading")
+	spinnerNode.SetProp("active", true)
+	if err := srv.Tree().Insert("root", spinnerNode, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 40
+	m.height = 10
+
+	_, cmd := m.Update(DOMChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected spinner to schedule an initial command")
+	}
+
+	if _, ok := cmd().(widget.CommandMsg); !ok {
+		t.Fatalf("expected widget.CommandMsg, got %T", cmd())
+	}
+}
+
+type widgetStub struct{}
+
+func (w *widgetStub) Init(_ *dom.Node) {}
+
+func (w *widgetStub) Update(_ tea.Msg, _ *dom.Node) widget.UpdateResult {
+	return widget.UpdateResult{}
+}
+
+func (w *widgetStub) View(node *dom.Node, _ []widget.RenderedChild, _ widget.ViewContext) string {
+	return node.ID
+}
+
+func (w *widgetStub) Layout(_ *dom.Node, _ widget.ViewContext) []widget.ChildConstraint {
+	return nil
+}
+
+type commandTickMsg struct{}
+
+type commandRoutingWidget struct {
+	initialCmds int
+	chainedCmds int
+	seenMsgs    []tea.Msg
+}
+
+func (w *commandRoutingWidget) Init(_ *dom.Node) {}
+
+func (w *commandRoutingWidget) Update(msg tea.Msg, _ *dom.Node) widget.UpdateResult {
+	w.seenMsgs = append(w.seenMsgs, msg)
+	if _, ok := msg.(commandTickMsg); ok && w.chainedCmds > 0 {
+		w.chainedCmds--
+		return widget.UpdateResult{
+			Cmd: func() tea.Msg { return commandTickMsg{} },
+		}
+	}
+	return widget.UpdateResult{}
+}
+
+func (w *commandRoutingWidget) View(_ *dom.Node, _ []widget.RenderedChild, _ widget.ViewContext) string {
+	return "progress"
+}
+
+func (w *commandRoutingWidget) Layout(_ *dom.Node, _ widget.ViewContext) []widget.ChildConstraint {
+	return nil
+}
+
+func (w *commandRoutingWidget) Command(_ *dom.Node) tea.Cmd {
+	if w.initialCmds == 0 {
+		return nil
+	}
+	w.initialCmds--
+	return func() tea.Msg { return commandTickMsg{} }
+}

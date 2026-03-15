@@ -1696,7 +1696,7 @@ func TestDescribeWidgets_All(t *testing.T) {
 	text := resultText(t, result)
 
 	// Should include known widget types.
-	for _, wtype := range []string{"list", "table", "button", "input", "container", "text"} {
+	for _, wtype := range []string{"list", "table", "button", "input", "container", "text", "progress", "spinner", "markdown", "sparkline"} {
 		if !strings.Contains(text, wtype) {
 			t.Errorf("catalog missing widget type %q", wtype)
 		}

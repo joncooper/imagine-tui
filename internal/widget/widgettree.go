@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joncooper/imagine-tui/internal/dom"
 )
 
@@ -74,6 +75,27 @@ func (wt *Tree) Sync(tree *dom.Tree) error {
 // Get returns the widget instance for the given node ID, or nil if not found.
 func (wt *Tree) Get(nodeID string) Widget {
 	return wt.instances[nodeID]
+}
+
+// Commands collects asynchronous commands requested by live widget instances.
+func (wt *Tree) Commands(tree *dom.Tree) []tea.Cmd {
+	var cmds []tea.Cmd
+	tree.Walk(func(n *dom.Node) bool {
+		w := wt.instances[n.ID]
+		if w == nil {
+			return true
+		}
+		commander, ok := w.(Commander)
+		if !ok {
+			return true
+		}
+		cmd := WrapCmd(n.ID, commander.Command(n))
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return true
+	})
+	return cmds
 }
 
 // Render walks the DOM tree bottom-up, rendering each node via its widget.

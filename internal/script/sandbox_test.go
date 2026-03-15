@@ -34,11 +34,7 @@ func TestForbiddenAPIs(t *testing.T) {
 	}{
 		{"require", `require('fs')`},
 		{"fetch", `fetch('http://example.com')`},
-		{"setTimeout", `setTimeout(function(){}, 100)`},
-		{"setInterval", `setInterval(function(){}, 100)`},
 		{"setImmediate", `setImmediate(function(){})`},
-		{"clearTimeout", `clearTimeout(1)`},
-		{"clearInterval", `clearInterval(1)`},
 		{"process", `process.exit(1)`},
 	}
 
@@ -53,6 +49,28 @@ func TestForbiddenAPIs(t *testing.T) {
 				t.Errorf("expected script.Error, got %T: %v", err, err)
 			}
 		})
+	}
+}
+
+func TestTimerGlobalsAvailable(t *testing.T) {
+	rt := newTestRuntime(t)
+
+	err := rt.execScript("root", "test", `
+		if (typeof setTimeout !== "function") {
+			throw new Error("expected setTimeout to be available");
+		}
+		if (typeof setInterval !== "function") {
+			throw new Error("expected setInterval to be available");
+		}
+		if (typeof clearTimeout !== "function") {
+			throw new Error("expected clearTimeout to be available");
+		}
+		if (typeof clearInterval !== "function") {
+			throw new Error("expected clearInterval to be available");
+		}
+	`, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

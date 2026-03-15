@@ -225,7 +225,7 @@ $('results').render(
 ```
 
 ### Sandboxing
-goja is configured with no I/O primitives: no `require`, no `fetch`, no filesystem, no timers (the runtime provides `on_tick` as a hook instead). Scripts can read/write the DOM, keep local state, and `emit`. The only door to the outside world is `emit('agent', ...)`.
+goja is configured with no I/O primitives: no `require`, no `fetch`, and no filesystem access. The runtime does provide sandboxed `setTimeout`/`setInterval` timers for short-lived local UI behavior; delays above the runtime cap are rejected, concurrent timers are capped, and timers are canceled when their owning node is removed. Scripts can read/write the DOM, keep local state, and `emit`. The only door to the outside world is `emit('agent', ...)`.
 
 ## Widget library
 

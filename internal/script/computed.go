@@ -10,8 +10,8 @@ import (
 
 // DepGraph tracks computed property dependencies.
 type DepGraph struct {
-	forward map[depKey]map[string]bool // computed prop -> set of nodeIDs it reads
-	reverse map[string][]depKey        // nodeID -> computed props that depend on it
+	forward map[depKey]map[sourceKey]bool // computed prop -> set of sources it reads
+	reverse map[sourceKey][]depKey        // source -> computed props that depend on it
 }
 
 type depKey struct {
@@ -19,16 +19,29 @@ type depKey struct {
 	PropName string
 }
 
+type sourceKey struct {
+	NodeID string
+	Key    string
+}
+
+func propSource(nodeID, propName string) sourceKey {
+	return sourceKey{NodeID: nodeID, Key: "prop:" + propName}
+}
+
+func stateSource(nodeID, key string) sourceKey {
+	return sourceKey{NodeID: nodeID, Key: "state:" + key}
+}
+
 // newDepGraph creates an empty dependency graph.
 func newDepGraph() *DepGraph {
 	return &DepGraph{
-		forward: make(map[depKey]map[string]bool),
-		reverse: make(map[string][]depKey),
+		forward: make(map[depKey]map[sourceKey]bool),
+		reverse: make(map[sourceKey][]depKey),
 	}
 }
 
 // Update sets the dependencies for a computed prop, updating both forward and reverse maps.
-func (dg *DepGraph) Update(key depKey, accessed map[string]bool) {
+func (dg *DepGraph) Update(key depKey, accessed map[sourceKey]bool) {
 	// Remove old reverse entries.
 	if old, ok := dg.forward[key]; ok {
 		for oldDep := range old {
@@ -45,7 +58,24 @@ func (dg *DepGraph) Update(key depKey, accessed map[string]bool) {
 
 // Dependents returns all computed props that depend on the given nodeID.
 func (dg *DepGraph) Dependents(nodeID string) []depKey {
-	return dg.reverse[nodeID]
+	set := make(map[depKey]bool)
+	for source, deps := range dg.reverse {
+		if source.NodeID != nodeID {
+			continue
+		}
+		for _, dk := range deps {
+			set[dk] = true
+		}
+	}
+	result := make([]depKey, 0, len(set))
+	for dk := range set {
+		result = append(result, dk)
+	}
+	return result
+}
+
+func (dg *DepGraph) dependentsForSource(source sourceKey) []depKey {
+	return dg.reverse[source]
 }
 
 // RemoveNode removes all entries for a node (both as a dependency and as a computed prop owner).
@@ -60,7 +90,11 @@ func (dg *DepGraph) RemoveNode(nodeID string) {
 		}
 	}
 	// Remove as a dependency source.
-	delete(dg.reverse, nodeID)
+	for source := range dg.reverse {
+		if source.NodeID == nodeID {
+			delete(dg.reverse, source)
+		}
+	}
 }
 
 // DetectCycle checks if evaluating the given computed prop would eventually
@@ -68,40 +102,40 @@ func (dg *DepGraph) RemoveNode(nodeID string) {
 // evaluating dk dirties dk.NodeID → computed props depending on dk.NodeID
 // get re-evaluated → dirtying their nodes → etc. Returns true if a cycle exists.
 func (dg *DepGraph) DetectCycle(startKey depKey) bool {
-	visited := make(map[string]bool)
-	return dg.wouldTrigger(startKey.NodeID, startKey, visited)
+	visited := make(map[sourceKey]bool)
+	return dg.wouldTrigger(propSource(startKey.NodeID, startKey.PropName), startKey, visited)
 }
 
 // wouldTrigger checks if dirtying dirtyNodeID would eventually cause target
 // to need re-evaluation.
-func (dg *DepGraph) wouldTrigger(dirtyNodeID string, target depKey, visited map[string]bool) bool {
-	if visited[dirtyNodeID] {
+func (dg *DepGraph) wouldTrigger(dirtySource sourceKey, target depKey, visited map[sourceKey]bool) bool {
+	if visited[dirtySource] {
 		return false
 	}
-	visited[dirtyNodeID] = true
+	visited[dirtySource] = true
 
-	for _, dk := range dg.reverse[dirtyNodeID] {
+	for _, dk := range dg.reverse[dirtySource] {
 		if dk == target {
 			return true
 		}
 		// Evaluating dk would dirty dk.NodeID.
-		if dg.wouldTrigger(dk.NodeID, target, visited) {
+		if dg.wouldTrigger(propSource(dk.NodeID, dk.PropName), target, visited) {
 			return true
 		}
 	}
 	return false
 }
 
-func (dg *DepGraph) removeReverse(nodeID string, key depKey) {
-	deps := dg.reverse[nodeID]
+func (dg *DepGraph) removeReverse(source sourceKey, key depKey) {
+	deps := dg.reverse[source]
 	for i, dk := range deps {
 		if dk == key {
-			dg.reverse[nodeID] = append(deps[:i], deps[i+1:]...)
+			dg.reverse[source] = append(deps[:i], deps[i+1:]...)
 			break
 		}
 	}
-	if len(dg.reverse[nodeID]) == 0 {
-		delete(dg.reverse, nodeID)
+	if len(dg.reverse[source]) == 0 {
+		delete(dg.reverse, source)
 	}
 }
 
@@ -109,7 +143,7 @@ func (dg *DepGraph) removeReverse(nodeID string, key depKey) {
 type evalCtx struct {
 	ownerNodeID string
 	propName    string
-	accessed    map[string]bool
+	accessed    map[sourceKey]bool
 }
 
 // EvalComputed evaluates a computed prop expression and returns the result.
@@ -137,7 +171,7 @@ func (rt *Runtime) evalComputedLocked(nodeID, propName, expr string) (any, error
 	rt.currentEval = &evalCtx{
 		ownerNodeID: nodeID,
 		propName:    propName,
-		accessed:    make(map[string]bool),
+		accessed:    make(map[sourceKey]bool),
 	}
 	defer func() { rt.currentEval = nil }()
 
@@ -173,43 +207,74 @@ func (rt *Runtime) PropagateChanges() error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
+	return rt.propagateChangesLocked(nil)
+}
+
+// propagateChangesLocked re-evaluates computed props that depend on dirty nodes.
+// Must be called with rt.mu held. If changed is non-nil, all directly dirty and
+// recomputed node IDs are recorded into it.
+func (rt *Runtime) propagateChangesLocked(changed map[string]bool) error {
 	const maxIterations = 100
 	for i := 0; i < maxIterations; i++ {
-		if len(rt.dirty) == 0 {
+		if len(rt.dirty) == 0 && len(rt.dirtySources) == 0 {
 			return nil
 		}
 
 		// Snapshot and clear current dirty set.
 		batch := rt.dirty
 		rt.dirty = make(map[string]bool)
+		sourceBatch := rt.dirtySources
+		rt.dirtySources = make(map[sourceKey]bool)
 
-		for nodeID := range batch {
-			deps := rt.deps.Dependents(nodeID)
-			for _, dk := range deps {
-				// Cycle detection.
-				if rt.deps.DetectCycle(dk) {
-					return &Error{
-						NodeID:  dk.NodeID,
-						Hook:    dk.PropName,
-						Message: fmt.Sprintf("cycle detected in computed prop: %s.%s", dk.NodeID, dk.PropName),
-					}
-				}
+		pending := make(map[depKey]bool)
 
-				node := rt.tree.Find(dk.NodeID)
-				if node == nil {
-					continue
+		if len(sourceBatch) == 0 {
+			for nodeID := range batch {
+				if changed != nil {
+					changed[nodeID] = true
 				}
-				expr, ok := node.Computed[dk.PropName]
-				if !ok {
-					continue
+				for _, dk := range rt.deps.Dependents(nodeID) {
+					pending[dk] = true
 				}
+			}
+		}
 
-				val, err := rt.evalComputedLocked(dk.NodeID, dk.PropName, expr)
-				if err != nil {
-					return err
+		for source := range sourceBatch {
+			if changed != nil {
+				changed[source.NodeID] = true
+			}
+			for _, dk := range rt.deps.dependentsForSource(source) {
+				pending[dk] = true
+			}
+		}
+
+		for dk := range pending {
+			// Cycle detection.
+			if rt.deps.DetectCycle(dk) {
+				return &Error{
+					NodeID:  dk.NodeID,
+					Hook:    dk.PropName,
+					Message: fmt.Sprintf("cycle detected in computed prop: %s.%s", dk.NodeID, dk.PropName),
 				}
-				node.SetProp(dk.PropName, val)
-				rt.dirty[dk.NodeID] = true
+			}
+
+			node := rt.tree.Find(dk.NodeID)
+			if node == nil {
+				continue
+			}
+			expr, ok := node.Computed[dk.PropName]
+			if !ok {
+				continue
+			}
+
+			val, err := rt.evalComputedLocked(dk.NodeID, dk.PropName, expr)
+			if err != nil {
+				return err
+			}
+			node.SetProp(dk.PropName, val)
+			rt.markDirtyProp(dk.NodeID, dk.PropName)
+			if changed != nil {
+				changed[dk.NodeID] = true
 			}
 		}
 	}

@@ -1755,7 +1755,7 @@ func TestDescribeScripting_ReturnsDollarAPI(t *testing.T) {
 	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
 	text := resultText(t, result)
 
-	for _, api := range []string{"$.value", "$.props", "$('id')"} {
+	for _, api := range []string{"$.value", "$.props", "$.state", "$('id')", "$('id').state"} {
 		if !strings.Contains(text, api) {
 			t.Errorf("missing $ API entry %q in describe_scripting response", api)
 		}
@@ -1770,9 +1770,24 @@ func TestDescribeScripting_ReturnsGlobals(t *testing.T) {
 	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
 	text := resultText(t, result)
 
-	for _, global := range []string{"emit", "state", "event", "debug"} {
+	for _, global := range []string{"emit", "state", "event", "debug", "setTimeout", "setInterval", "clearTimeout", "clearInterval"} {
 		if !strings.Contains(text, global) {
 			t.Errorf("missing global %q in describe_scripting response", global)
+		}
+	}
+}
+
+func TestDescribeScripting_DocumentsStateReactivityLimits(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_scripting", map[string]any{})
+	text := resultText(t, result)
+
+	for _, want := range []string{"top-level", "reactive", "nested object mutation is not tracked"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing state reactivity guidance %q in describe_scripting response", want)
 		}
 	}
 }

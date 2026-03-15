@@ -112,8 +112,8 @@ func TestCurrentNodeWriteStillWorksWithCallable(t *testing.T) {
 func TestCrossNodeReadID(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 	err := rt.execScript("root", "test", `
-		if ($('child1').id !== "child1") {
-			throw new Error("expected 'child1', got " + $('child1').id);
+			if ($('child1').id !== "child1") {
+				throw new Error("expected 'child1', got " + $('child1').id);
 		}
 	`, nil)
 	if err != nil {
@@ -139,6 +139,45 @@ func TestCrossNodeDirtiesTarget(t *testing.T) {
 
 	if !isDirty {
 		t.Error("expected child1 to be in dirty set after cross-node write")
+	}
+}
+
+func TestCrossNodeReadState(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	err := rt.execScript("child1", "test", `state.count = 3`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rt.execScript("child2", "test", `
+			if ($('child1').state.count !== 3) {
+				throw new Error("expected 3, got " + $('child1').state.count);
+			}
+	`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCrossNodeStateWriteMarksTargetDirty(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	rt.mu.Lock()
+	rt.dirty = make(map[string]bool)
+	rt.mu.Unlock()
+
+	err := rt.execScript("root", "test", `$('child1').state.count = 7`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt.mu.Lock()
+	isDirty := rt.dirty["child1"]
+	rt.mu.Unlock()
+
+	if !isDirty {
+		t.Error("expected child1 to be in dirty set after cross-node state write")
 	}
 }
 

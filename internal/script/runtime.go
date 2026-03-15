@@ -16,16 +16,22 @@ const defaultTimeout = 10 * time.Millisecond
 // Runtime is the script execution engine for a session.
 // It owns a single goja VM and manages per-node state.
 type Runtime struct {
-	mu          sync.Mutex
-	vm          *goja.Runtime
-	tree        *dom.Tree
-	events      *dom.EventQueue
-	states      map[string]*goja.Object // nodeID -> persistent JS state
-	deps        *DepGraph               // computed prop dependency tracking
-	dirty       map[string]bool         // nodes modified since last propagation
-	currentEval *evalCtx                // non-nil during computed prop eval
-	timeout     time.Duration
-	debugLog    func(string)
+	mu                  sync.Mutex
+	vm                  *goja.Runtime
+	tree                *dom.Tree
+	events              *dom.EventQueue
+	states              map[string]*goja.Object // nodeID -> persistent JS state
+	deps                *DepGraph               // computed prop dependency tracking
+	dirty               map[string]bool         // nodes modified since last propagation
+	dirtySources        map[sourceKey]bool      // precise prop/state sources modified since last propagation
+	currentEval         *evalCtx                // non-nil during computed prop eval
+	timeout             time.Duration
+	debugLog            func(string)
+	timers              map[int64]*scriptTimer
+	timerOwners         map[string]map[int64]bool
+	nextTimerID         int64
+	maxTimerDuration    time.Duration
+	maxConcurrentTimers int
 }
 
 // Option configures the Runtime.
@@ -45,16 +51,33 @@ func WithDebugLog(fn func(string)) Option {
 	}
 }
 
+// WithTimerLimits configures the runtime's timer safety limits.
+func WithTimerLimits(maxDuration time.Duration, maxConcurrent int) Option {
+	return func(rt *Runtime) {
+		if maxDuration > 0 {
+			rt.maxTimerDuration = maxDuration
+		}
+		if maxConcurrent > 0 {
+			rt.maxConcurrentTimers = maxConcurrent
+		}
+	}
+}
+
 // New creates a new script Runtime bound to a DOM tree and event queue.
 func New(tree *dom.Tree, events *dom.EventQueue, opts ...Option) *Runtime {
 	rt := &Runtime{
-		vm:      goja.New(),
-		tree:    tree,
-		events:  events,
-		states:  make(map[string]*goja.Object),
-		deps:    newDepGraph(),
-		dirty:   make(map[string]bool),
-		timeout: defaultTimeout,
+		vm:                  goja.New(),
+		tree:                tree,
+		events:              events,
+		states:              make(map[string]*goja.Object),
+		deps:                newDepGraph(),
+		dirty:               make(map[string]bool),
+		dirtySources:        make(map[sourceKey]bool),
+		timeout:             defaultTimeout,
+		timers:              make(map[int64]*scriptTimer),
+		timerOwners:         map[string]map[int64]bool{},
+		maxTimerDuration:    defaultMaxTimerDuration,
+		maxConcurrentTimers: defaultMaxConcurrentTimers,
 	}
 	for _, opt := range opts {
 		opt(rt)
@@ -68,8 +91,8 @@ func (rt *Runtime) initSandbox() {
 	// Delete dangerous globals by setting them to undefined.
 	dangerous := []string{
 		"require", "importScripts",
-		"setTimeout", "setInterval", "setImmediate",
-		"clearTimeout", "clearInterval", "clearImmediate",
+		"setImmediate",
+		"clearImmediate",
 		"fetch", "XMLHttpRequest",
 		"process", "globalThis",
 	}
@@ -144,8 +167,6 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 		}
 		id := call.Arguments[0].String()
 		target := rt.tree.Find(id)
-		// Record dependency if we're evaluating a computed prop.
-		rt.recordDep(id)
 		return rt.vm.NewDynamicObject(&nodeProxy{rt: rt, node: target})
 	})
 
@@ -163,11 +184,16 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	_ = rt.vm.Set("$", p)
 
 	// Bind per-node state object.
-	state := rt.getOrCreateState(node.ID)
-	_ = rt.vm.Set("state", state)
+	_ = rt.vm.Set("state", rt.makeStateProxy(node.ID))
 
 	// Bind emit function.
 	_ = rt.vm.Set("emit", rt.makeEmitFn(node.ID))
+
+	// Bind timer functions.
+	_ = rt.vm.Set("setTimeout", rt.makeSetTimerFn(node.ID, false))
+	_ = rt.vm.Set("setInterval", rt.makeSetTimerFn(node.ID, true))
+	_ = rt.vm.Set("clearTimeout", rt.makeClearTimerFn())
+	_ = rt.vm.Set("clearInterval", rt.makeClearTimerFn())
 
 	// Bind event payload if present.
 	if payload != nil {
@@ -177,11 +203,12 @@ func (rt *Runtime) setupContext(node *dom.Node, payload *HookPayload) {
 	}
 }
 
-// recordDep records a dependency on the given nodeID during computed prop evaluation.
-// No-op unless a computed prop evaluation is in progress. Must be called with rt.mu held.
-func (rt *Runtime) recordDep(nodeID string) {
+// recordSourceDep records a dependency on a specific source during computed prop
+// evaluation. No-op unless a computed prop evaluation is in progress. Must be
+// called with rt.mu held.
+func (rt *Runtime) recordSourceDep(source sourceKey) {
 	if rt.currentEval != nil {
-		rt.currentEval.accessed[nodeID] = true
+		rt.currentEval.accessed[source] = true
 	}
 }
 

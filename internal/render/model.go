@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -29,6 +30,7 @@ type Model struct {
 	scripts             *script.Runtime
 	scriptTree          *dom.Tree
 	knownNodes          map[string]bool
+	timerSeq            uint64
 }
 
 // NewModel creates a new render Model backed by the given MCP server and widget registry.
@@ -65,7 +67,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logger.Info("window resize", "width", msg.Width, "height", msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
-		cmd := m.syncState()
+		cmd := m.withTimerCmd(m.syncState())
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -78,7 +80,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
-		return m.handleKey(msg)
+		next, cmd := m.handleKey(msg)
+		return next, cmd
 
 	case DOMChangedMsg:
 		m.logger.Info("DOM changed, syncing state")
@@ -97,6 +100,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focusedID = m.focus.IDs[0]
 			m.logger.Info("auto-focus first element", "focused", m.focusedID)
 		}
+		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
 	case MCPDisconnectedMsg:
@@ -107,7 +111,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logger.Info("MCP disconnected", "session_id", msg.SessionID, "error", msg.Err)
 		m.activeSessionID = 0
 		m.waitingForReconnect = true
-		return m, nil
+		cmd := m.withTimerCmd(nil)
+		return m, cmd
 
 	case MCPConnectedMsg:
 		m.logger.Info("MCP connected", "session_id", msg.SessionID)
@@ -118,6 +123,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Error("script sync failed", "error", err)
 			cmd = m.syncState()
 		}
+		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
 	case widget.CommandMsg:
@@ -126,6 +132,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ShutdownMsg:
 		m.server.Shutdown()
 		return m, tea.Quit
+
+	case scriptTimerMsg:
+		if msg.Seq != m.timerSeq || m.scripts == nil {
+			return m, nil
+		}
+		ran, err := m.scripts.RunDueTimers(msg.FiredAt)
+		if err != nil {
+			m.logger.Error("script timer failed", "error", err)
+		}
+		if ran {
+			if _, err := m.refreshScriptsAndWidgets(); err != nil {
+				m.logger.Error("script refresh failed", "error", err)
+				m.syncState()
+			}
+		}
+		cmd := m.withTimerCmd(nil)
+		return m, cmd
 	}
 
 	return m, nil
@@ -172,7 +195,7 @@ func (m *Model) syncState() tea.Cmd {
 
 // handleKey processes keyboard input. Must be called under the server's Lock
 // (held by Update).
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.server.Shutdown()
@@ -182,22 +205,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		oldFocus := m.focusedID
 		m.focusedID = m.focusTab(true)
 		m.logger.Info("tab focus", "new_focus", m.focusedID)
-		cmd := m.runFocusHooks(oldFocus, m.focusedID)
+		cmd := m.withTimerCmd(m.runFocusHooks(oldFocus, m.focusedID))
 		return m, cmd
 
 	case tea.KeyShiftTab:
 		oldFocus := m.focusedID
 		m.focusedID = m.focusTab(false)
 		m.logger.Info("shift-tab focus", "new_focus", m.focusedID)
-		cmd := m.runFocusHooks(oldFocus, m.focusedID)
+		cmd := m.withTimerCmd(m.runFocusHooks(oldFocus, m.focusedID))
 		return m, cmd
 
 	default:
 		// Route to focused widget.
 		if m.focusedID != "" {
-			return m.routeKeyToWidget(msg)
+			next, cmd := m.routeKeyToWidget(msg)
+			timerCmd := next.withTimerCmd(cmd)
+			return next, timerCmd
 		}
-		return m, nil
+		cmd := m.withTimerCmd(nil)
+		return m, cmd
 	}
 }
 
@@ -212,7 +238,7 @@ func (m *Model) focusTab(forward bool) string {
 
 // routeKeyToWidget sends a key message to the currently focused widget and
 // processes any events it produces.
-func (m Model) routeKeyToWidget(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) routeKeyToWidget(msg tea.KeyMsg) (Model, tea.Cmd) {
 	w := m.widgets.Get(m.focusedID)
 	if w == nil {
 		return m, nil
@@ -258,6 +284,44 @@ func (m Model) routeWidgetMessage(msg widget.CommandMsg) (tea.Model, tea.Cmd) {
 	result := w.Update(msg.Msg, node)
 	eventCmd := m.routeWidgetEvents(result.Events)
 	return m, batchCmds(widget.WrapCmd(node.ID, result.Cmd), eventCmd)
+}
+
+func (m *Model) withTimerCmd(cmd tea.Cmd) tea.Cmd {
+	timerCmd := m.scheduleTimerCmd()
+	switch {
+	case cmd == nil:
+		return timerCmd
+	case timerCmd == nil:
+		return cmd
+	default:
+		return tea.Batch(cmd, timerCmd)
+	}
+}
+
+func (m *Model) scheduleTimerCmd() tea.Cmd {
+	m.timerSeq++
+	seq := m.timerSeq
+
+	if m.scripts == nil {
+		return nil
+	}
+
+	nextAt, ok := m.scripts.NextTimerAt()
+	if !ok {
+		return nil
+	}
+
+	delay := time.Until(nextAt)
+	if delay < 0 {
+		delay = 0
+	}
+
+	return tea.Tick(delay, func(firedAt time.Time) tea.Msg {
+		return scriptTimerMsg{
+			Seq:     seq,
+			FiredAt: firedAt,
+		}
+	})
 }
 
 // routeWidgetEvent routes a widget event to the appropriate destination:

@@ -162,6 +162,50 @@ func TestModelKeyRouteToFocusedWidget(t *testing.T) {
 	}
 }
 
+func TestModelKeyRouteToFocusedScrollContainer(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := srv.Tree().Root
+	root.SetProp("direction", "vertical")
+
+	panel, _ := dom.NewNode("panel", dom.TypeContainer)
+	panel.SetProp("overflow", "scroll")
+	panel.SetProp("height", 3)
+	panel.SetProp("focusable", true)
+	if err := srv.Tree().Insert("root", panel, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := dom.NewNode("body", dom.TypeText)
+	body.SetProp("wrap", false)
+	body.SetProp("text", "line1\nline2\nline3\nline4\nline5")
+	if err := srv.Tree().Insert("panel", body, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 40
+	m.height = 10
+	m.syncState()
+	m.focusedID = "panel"
+
+	before := m.View()
+	if !strings.Contains(before, "line1") {
+		t.Fatalf("expected initial viewport content, got:\n%s", before)
+	}
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model := newM.(Model)
+
+	after := model.View()
+	if !strings.Contains(after, "line4") || strings.Contains(after, "line1") {
+		t.Fatalf("expected scrolled viewport, got:\n%s", after)
+	}
+}
+
 // --- M5-4 Tests ---
 
 func TestModelWindowSizeMsg(t *testing.T) {

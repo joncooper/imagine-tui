@@ -18,6 +18,10 @@ const (
 // Returns the set of dirty node IDs (nodes whose props were modified).
 // If the node has no script for the given hook, this is a no-op.
 func (rt *Runtime) ExecHook(nodeID string, hook HookType, payload *HookPayload) ([]string, error) {
+	return rt.execHook(nodeID, hook, payload, true)
+}
+
+func (rt *Runtime) execHook(nodeID string, hook HookType, payload *HookPayload, resetDirty bool) ([]string, error) {
 	node := rt.tree.Find(nodeID)
 	if node == nil {
 		return nil, &Error{NodeID: nodeID, Hook: string(hook), Message: "node not found"}
@@ -28,9 +32,13 @@ func (rt *Runtime) ExecHook(nodeID string, hook HookType, payload *HookPayload) 
 		return nil, nil
 	}
 
-	// Clear dirty set before execution.
+	// Clear dirty set before execution unless the caller is carrying forward an
+	// already-dirty node (for example NotifyChange setting $.value first).
 	rt.mu.Lock()
-	rt.dirty = make(map[string]bool)
+	if resetDirty {
+		rt.dirty = make(map[string]bool)
+		rt.dirtySources = make(map[sourceKey]bool)
+	}
 	rt.mu.Unlock()
 
 	err := rt.execScript(nodeID, string(hook), body, payload)
@@ -38,14 +46,18 @@ func (rt *Runtime) ExecHook(nodeID string, hook HookType, payload *HookPayload) 
 		return nil, err
 	}
 
-	// Collect dirty IDs.
 	rt.mu.Lock()
-	dirty := make([]string, 0, len(rt.dirty))
-	for id := range rt.dirty {
+	defer rt.mu.Unlock()
+
+	changed := make(map[string]bool)
+	if err := rt.propagateChangesLocked(changed); err != nil {
+		return nil, err
+	}
+
+	dirty := make([]string, 0, len(changed))
+	for id := range changed {
 		dirty = append(dirty, id)
 	}
-	rt.mu.Unlock()
-
 	return dirty, nil
 }
 
@@ -61,6 +73,7 @@ func (rt *Runtime) NotifyMount(nodeID string) error {
 func (rt *Runtime) NotifyRemove(nodeID string) {
 	rt.removeState(nodeID)
 	rt.mu.Lock()
+	rt.clearNodeTimersLocked(nodeID)
 	rt.deps.RemoveNode(nodeID)
 	rt.mu.Unlock()
 }
@@ -74,9 +87,16 @@ func (rt *Runtime) NotifyChange(nodeID string, newValue any) error {
 	}
 
 	node.SetProp("value", newValue)
+	rt.mu.Lock()
+	rt.markDirtyProp(nodeID, "value")
+	rt.mu.Unlock()
 
-	_, err := rt.ExecHook(nodeID, HookOnChange, &HookPayload{
-		Data: map[string]any{"value": newValue},
-	})
-	return err
+	if body, ok := node.Scripts[string(HookOnChange)]; ok && body != "" {
+		_, err := rt.execHook(nodeID, HookOnChange, &HookPayload{
+			Data: map[string]any{"value": newValue},
+		}, false)
+		return err
+	}
+
+	return rt.PropagateChanges()
 }

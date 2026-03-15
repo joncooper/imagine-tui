@@ -86,6 +86,7 @@ func TestBuildFocusRingAllTypes(t *testing.T) {
 	for i, typ := range []dom.NodeType{
 		dom.TypeInput, dom.TypeTextarea, dom.TypeSelect,
 		dom.TypeButton, dom.TypeTable, dom.TypeList, dom.TypeDiff,
+		dom.TypeLog, dom.TypeCode,
 	} {
 		id := "n" + string(rune('0'+i))
 		n, _ := dom.NewNode(id, typ)
@@ -93,8 +94,26 @@ func TestBuildFocusRingAllTypes(t *testing.T) {
 	}
 
 	ring := BuildFocusRing(tree)
-	if len(ring.IDs) != 7 {
-		t.Fatalf("expected 7 focusable nodes, got %d: %v", len(ring.IDs), ring.IDs)
+	if len(ring.IDs) != 9 {
+		t.Fatalf("expected 9 focusable nodes, got %d: %v", len(ring.IDs), ring.IDs)
+	}
+}
+
+func TestBuildFocusRingIncludesOverflowScrollContainer(t *testing.T) {
+	root, _ := dom.NewNode("root", dom.TypeContainer)
+	tree, _ := dom.NewTree(root)
+
+	panel, _ := dom.NewNode("panel", dom.TypeContainer)
+	panel.SetProp("overflow", "scroll")
+	panel.SetProp("height", 5)
+	mustInsert(t, tree, "root", panel)
+
+	body, _ := dom.NewNode("body", dom.TypeText)
+	mustInsert(t, tree, "panel", body)
+
+	ring := BuildFocusRing(tree)
+	if !ring.Contains("panel") {
+		t.Fatalf("expected overflow-scrolling container to be focusable, got %v", ring.IDs)
 	}
 }
 

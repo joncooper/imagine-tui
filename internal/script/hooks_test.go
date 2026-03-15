@@ -233,6 +233,28 @@ func TestNotifyChange(t *testing.T) {
 	}
 }
 
+func TestNotifyChangeAutoPropagatesComputed(t *testing.T) {
+	rt := newTestRuntimeWithTree(t)
+
+	child1 := rt.tree.Find("child1")
+	child1.Computed["text"] = `return "got:" + $('child2').value`
+
+	err := rt.EvalAllComputed()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rt.NotifyChange("child2", "updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txt, _ := child1.GetProp("text")
+	if txt != "got:updated" {
+		t.Errorf("expected text='got:updated', got %v", txt)
+	}
+}
+
 func TestNotifyChangeNoScript(t *testing.T) {
 	rt := newTestRuntimeWithTree(t)
 

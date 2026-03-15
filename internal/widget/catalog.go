@@ -30,19 +30,22 @@ func Catalog() []Info {
 	return []Info{
 		{
 			Type:        "container",
-			Description: "Layout container that arranges children horizontally or vertically. Use as the structural backbone of any UI.",
+			Description: "Layout container that arranges children horizontally or vertically. Use as the structural backbone of any UI. When overflow is set to \"scroll\" and height is constrained, the container becomes keyboard-scrollable.",
 			Props: []PropInfo{
 				{Name: "direction", Type: "string", Description: "Layout direction: \"horizontal\" or \"vertical\"", Default: "vertical"},
 				{Name: "gap", Type: "int", Description: "Spacing between children in cells"},
 				{Name: "padding", Type: "int", Description: "Inner padding in cells"},
 				{Name: "border", Type: "string", Description: "Border style: \"none\", \"rounded\", \"thick\", \"double\", \"hidden\"", Default: "none"},
 				{Name: "width", Type: "string", Description: "Width: integer (fixed), \"50%\" (percent), or \"fill\" (remaining space)"},
+				{Name: "height", Type: "string", Description: "Height: integer (fixed) or \"50%\" of the available parent height"},
+				{Name: "max_height", Type: "string", Description: "Maximum height: integer (fixed) or \"50%\" of the available parent height"},
+				{Name: "overflow", Type: "string", Description: "Overflow behavior. Set to \"scroll\" to enable a viewport when height is constrained"},
 				{Name: "style", Type: "string", Description: "Theme token for styling"},
 				{Name: "focus_trap", Type: "bool", Description: "If true, Tab/Shift-Tab cycles only among focusable descendants"},
 				{Name: "item_template", Type: "map", Description: "Template for set_items: a node spec with {{key}} placeholders in string props"},
 			},
 			Focusable:  false,
-			Scrollable: false,
+			Scrollable: true,
 		},
 		{
 			Type:        "text",

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -50,7 +51,7 @@ func newTestModelWithTree(t *testing.T) (Model, *imcp.Server) {
 	m.width = 80
 	m.height = 24
 	// Sync widgets and focus ring.
-	m.syncState()
+	m.syncState(context.Background())
 	return m, srv
 }
 
@@ -69,7 +70,7 @@ func TestModelViewEmpty(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80
 	m.height = 24
-	m.syncState()
+	m.syncState(context.Background())
 
 	// An empty root container renders an empty string, which is valid.
 	// Just verify View() doesn't panic.
@@ -96,7 +97,7 @@ func TestModelDOMChangedMsg(t *testing.T) {
 	}
 
 	// Send DOMChangedMsg.
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	view := model.View()
@@ -149,7 +150,7 @@ func TestModelKeyRouteToFocusedWidget(t *testing.T) {
 
 	// Focus the input.
 	m.focusedID = "name_input"
-	m.syncState()
+	m.syncState(context.Background())
 
 	// Type a character.
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -189,7 +190,7 @@ func TestModelKeyRouteToFocusedScrollContainer(t *testing.T) {
 	m := NewModel(srv, widget.DefaultRegistry())
 	m.width = 40
 	m.height = 10
-	m.syncState()
+	m.syncState(context.Background())
 	m.focusedID = "panel"
 
 	before := m.View()
@@ -255,9 +256,9 @@ func TestModelZeroSizeReturnsEmpty(t *testing.T) {
 func TestModelMCPDisconnectedMsg(t *testing.T) {
 	m, _ := newTestModelWithTree(t)
 
-	newM, _ := m.Update(MCPConnectedMsg{SessionID: 1})
+	newM, _ := m.Update(MCPConnectedMsg{SessionID: 1, Ctx: context.Background()})
 	model := newM.(Model)
-	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1})
+	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1, Ctx: context.Background()})
 	model2 := newM2.(Model)
 
 	if !model2.waitingForReconnect {
@@ -276,9 +277,9 @@ func TestModelMCPDisconnectedMsg(t *testing.T) {
 func TestModelIgnoresStaleDisconnect(t *testing.T) {
 	m, _ := newTestModelWithTree(t)
 
-	newM, _ := m.Update(MCPConnectedMsg{SessionID: 2})
+	newM, _ := m.Update(MCPConnectedMsg{SessionID: 2, Ctx: context.Background()})
 	model := newM.(Model)
-	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1})
+	newM2, _ := model.Update(MCPDisconnectedMsg{SessionID: 1, Ctx: context.Background()})
 	model2 := newM2.(Model)
 
 	if model2.waitingForReconnect {
@@ -335,7 +336,7 @@ func TestModelFocusRingRebuildsOnDOMChange(t *testing.T) {
 	}
 
 	// Trigger DOM change.
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	// Focus should move since submit_btn no longer exists.
@@ -384,7 +385,7 @@ func TestModelRoutesWidgetCommandMsgs(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	_, cmd := m.Update(DOMChangedMsg{})
+	_, cmd := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	if cmd == nil {
 		t.Fatal("expected DOMChangedMsg to schedule a widget command")
 	}
@@ -448,7 +449,7 @@ func TestModelIgnoresStaleWidgetCommandMsgs(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	_, cmd := m.Update(DOMChangedMsg{})
+	_, cmd := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	if cmd == nil {
 		t.Fatal("expected DOMChangedMsg to schedule a widget command")
 	}
@@ -457,7 +458,7 @@ func TestModelIgnoresStaleWidgetCommandMsgs(t *testing.T) {
 	if _, err := srv.Tree().Remove("progress"); err != nil {
 		t.Fatal(err)
 	}
-	m.syncState()
+	m.syncState(context.Background())
 
 	newM, nextCmd := m.Update(staleMsg)
 	_ = newM.(Model)
@@ -489,7 +490,7 @@ func TestModelSpinnerSchedulesInitialTick(t *testing.T) {
 	m.width = 40
 	m.height = 10
 
-	_, cmd := m.Update(DOMChangedMsg{})
+	_, cmd := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	if cmd == nil {
 		t.Fatal("expected spinner to schedule an initial command")
 	}

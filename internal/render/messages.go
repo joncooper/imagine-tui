@@ -1,21 +1,28 @@
 package render
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // DOMChangedMsg is sent to the BubbleTea program when the DOM tree has been
 // mutated by an MCP tool call (patch, replace, restore). The Update loop
 // re-syncs the widget tree and re-renders.
-type DOMChangedMsg struct{}
+type DOMChangedMsg struct {
+	Ctx context.Context
+}
 
 // MCPDisconnectedMsg is sent when the MCP connection breaks (e.g., broken pipe).
 type MCPDisconnectedMsg struct {
 	SessionID uint64
 	Err       error
+	Ctx       context.Context
 }
 
 // MCPConnectedMsg is sent when the MCP server is ready.
 type MCPConnectedMsg struct {
 	SessionID uint64
+	Ctx       context.Context
 }
 
 // ShutdownMsg requests a graceful shutdown.
@@ -24,4 +31,5 @@ type ShutdownMsg struct{}
 type scriptTimerMsg struct {
 	Seq     uint64
 	FiredAt time.Time
+	Ctx     context.Context
 }

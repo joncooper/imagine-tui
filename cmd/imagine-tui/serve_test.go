@@ -41,9 +41,9 @@ func TestUnixSocketIntegration(t *testing.T) {
 	mp := &mockProgram{}
 	bridge := render.NewBridge(srv, mp)
 	var mutationCount atomic.Int32
-	srv.SetOnMutation(func() {
+	srv.SetOnMutation(func(ctx context.Context) {
 		mutationCount.Add(1)
-		bridge.NotifyDOMChanged()
+		bridge.NotifyDOMChanged(ctx)
 	})
 
 	// Listen on a temp Unix socket.
@@ -203,7 +203,7 @@ func TestBridgedConnection(t *testing.T) {
 				if err != nil {
 					return
 				}
-				bridge.NotifyConnected(1)
+				bridge.NotifyConnected(ctx, 1)
 				_ = session.Wait()
 			}()
 		}

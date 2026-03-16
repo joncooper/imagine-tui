@@ -16,6 +16,10 @@ import (
 	"github.com/joncooper/imagine-tui/internal/dom"
 	"github.com/joncooper/imagine-tui/internal/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
 )
 
 // ToolHandler is the signature for a tool handler function.
@@ -30,8 +34,9 @@ type Server struct {
 	srv        *mcp.Server
 	handlers   map[string]ToolHandler // tool name -> handler, for direct invocation
 	shutdown   chan struct{}
-	onMutation func() // called after DOM-mutating operations (patch, replace, restore)
+	onMutation func(context.Context) // called after DOM-mutating operations (patch, replace, restore)
 	logger     *slog.Logger
+	tracer     trace.Tracer
 }
 
 // SetLogger sets the structured logger for the server.
@@ -39,16 +44,21 @@ func (s *Server) SetLogger(l *slog.Logger) {
 	s.logger = l
 }
 
+// SetTracer sets the tracer used for MCP tool instrumentation.
+func (s *Server) SetTracer(t trace.Tracer) {
+	s.tracer = t
+}
+
 // SetOnMutation registers a callback that fires after successful DOM mutations.
 // Used to notify BubbleTea of DOM changes so it can re-render.
-func (s *Server) SetOnMutation(fn func()) {
+func (s *Server) SetOnMutation(fn func(context.Context)) {
 	s.onMutation = fn
 }
 
 // notifyMutation calls the mutation callback if one is registered.
-func (s *Server) notifyMutation() {
+func (s *Server) notifyMutation(ctx context.Context) {
 	if s.onMutation != nil {
-		s.onMutation()
+		s.onMutation(ctx)
 	}
 }
 
@@ -108,6 +118,7 @@ func NewServer() (*Server, error) {
 		handlers: make(map[string]ToolHandler),
 		shutdown: make(chan struct{}),
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		tracer:   nooptrace.NewTracerProvider().Tracer("github.com/joncooper/imagine-tui/internal/mcp"),
 	}
 
 	s.srv = mcp.NewServer(&mcp.Implementation{
@@ -266,8 +277,38 @@ func (s *Server) registerTools() {
 }
 
 func (s *Server) addTool(tool *mcp.Tool, handler ToolHandler) {
-	s.srv.AddTool(tool, handler)
-	s.handlers[tool.Name] = handler
+	wrapped := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ctx, span := s.tracer.Start(
+			ctx,
+			"mcp.tool."+tool.Name,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				attribute.String("mcp.tool.name", tool.Name),
+			),
+		)
+		defer span.End()
+
+		if req != nil && req.Params != nil && req.Params.Arguments != nil {
+			span.SetAttributes(attribute.Int("mcp.tool.arguments_bytes", len(req.Params.Arguments)))
+		}
+
+		result, err := handler(ctx, req)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+		if result != nil {
+			span.SetAttributes(attribute.Bool("mcp.tool.result_is_error", result.IsError))
+			if result.IsError {
+				span.SetStatus(codes.Error, "tool returned error result")
+			}
+		}
+		return result, nil
+	}
+
+	s.srv.AddTool(tool, wrapped)
+	s.handlers[tool.Name] = wrapped
 }
 
 func patchTool() *mcp.Tool {
@@ -405,19 +446,20 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult(fmt.Sprintf("invalid ops: %v", err)), nil
 	}
 
-	s.logger.Info("patch", "op_count", len(ops))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("dom.patch.op_count", len(ops)))
+	s.logger.InfoContext(ctx, "patch", "op_count", len(ops))
 
 	s.mu.Lock()
 	err = s.tree.Patch(ops)
 	s.mu.Unlock()
 
 	if err != nil {
-		s.logger.Error("patch: failed", "error", err)
+		s.logger.ErrorContext(ctx, "patch: failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 
-	s.logger.Info("patch: success")
-	s.notifyMutation()
+	s.logger.InfoContext(ctx, "patch: success")
+	s.notifyMutation(ctx)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -442,22 +484,28 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		var spec dom.NodeSpec
 		if err := json.Unmarshal(input.Tree, &spec); err != nil {
 			s.mu.Unlock()
-			s.logger.Error("replace: invalid tree spec", "error", err)
+			s.logger.ErrorContext(ctx, "replace: invalid tree spec", "error", err)
 			return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
 		}
 		childCount := len(spec.Children)
-		s.logger.Info("replace: whole tree", "root_id", spec.ID, "root_type", spec.Type, "children", childCount)
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String("dom.replace.root_id", spec.ID),
+			attribute.String("dom.replace.root_type", string(spec.Type)),
+			attribute.Int("dom.replace.child_count", childCount),
+		)
+		s.logger.InfoContext(ctx, "replace: whole tree", "root_id", spec.ID, "root_type", spec.Type, "children", childCount)
 		if err := s.tree.ReplaceTree(&spec); err != nil {
 			s.mu.Unlock()
-			s.logger.Error("replace: ReplaceTree failed", "error", err)
+			s.logger.ErrorContext(ctx, "replace: ReplaceTree failed", "error", err)
 			return errResult(err.Error()), nil
 		}
 		nodeCount := 0
 		s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
 		summary := s.tree.Summary()
 		s.mu.Unlock()
-		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
-		s.notifyMutation()
+		trace.SpanFromContext(ctx).SetAttributes(attribute.Int("dom.replace.node_count", nodeCount))
+		s.logger.InfoContext(ctx, "replace: success", "node_count", nodeCount, "tree_summary", summary)
+		s.notifyMutation(ctx)
 		return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 	}
 
@@ -477,7 +525,11 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 	s.mu.Unlock()
 
-	s.notifyMutation()
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("dom.replace.target_id", input.TargetID),
+		attribute.Int("dom.replace.child_count", len(specs)),
+	)
+	s.notifyMutation(ctx)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -503,15 +555,25 @@ func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest)
 		Filter:     input.Filter,
 		DebounceMs: input.DebounceMs,
 	}
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.Int("await_event.timeout_ms", input.TimeoutMs),
+		attribute.Int("await_event.filter_count", len(input.Filter)),
+		attribute.Int("await_event.debounce_ms", input.DebounceMs),
+	)
 
 	evt, err := s.events.Dequeue(deqCtx, opts)
 	if err != nil {
 		// Check if this was a timeout.
 		if deqCtx.Err() != nil && input.TimeoutMs > 0 {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("await_event.timeout", true))
 			return jsonResult(timeoutResult{Timeout: true})
 		}
 		return errResult(fmt.Sprintf("await_event: %v", err)), nil
 	}
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("await_event.type", evt.Type),
+		attribute.String("await_event.source", evt.Source),
+	)
 
 	// Enrich with DOM summary if not already present.
 	if evt.DOMSummary == "" {
@@ -535,6 +597,7 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest) (
 	if input.Name == "" {
 		return errResult("missing required parameter: name"), nil
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("snapshot.name", input.Name))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -558,6 +621,7 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 	if input.Name == "" {
 		return errResult("missing required parameter: name"), nil
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("snapshot.name", input.Name))
 
 	s.mu.Lock()
 	err := s.snaps.Restore(input.Name, s.tree)
@@ -567,7 +631,7 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 		return errResult(err.Error()), nil
 	}
 
-	s.notifyMutation()
+	s.notifyMutation(ctx)
 	return jsonResult(okNameResult{OK: true, Restored: input.Name})
 }
 
@@ -584,7 +648,8 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult("missing required parameter: ids"), nil
 	}
 
-	s.logger.Info("query", "ids", input.IDs, "tree_summary", s.tree.Summary())
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("query.id_count", len(input.IDs)))
+	s.logger.InfoContext(ctx, "query", "ids", input.IDs, "tree_summary", s.tree.Summary())
 
 	s.mu.Lock()
 	results, errs := s.tree.Query(input.IDs)
@@ -596,7 +661,7 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		for i, e := range errs {
 			resp.Errors[i] = e.Error()
 		}
-		s.logger.Warn("query: some IDs not found", "errors", resp.Errors)
+		s.logger.WarnContext(ctx, "query: some IDs not found", "errors", resp.Errors)
 	}
 
 	return jsonResult(resp)
@@ -806,24 +871,30 @@ func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*m
 
 	var spec dom.NodeSpec
 	if err := json.Unmarshal(input.Tree, &spec); err != nil {
-		s.logger.Error("layout: invalid tree spec", "error", err)
+		s.logger.ErrorContext(ctx, "layout: invalid tree spec", "error", err)
 		return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
 	}
 
-	s.logger.Info("layout", "root_id", spec.ID, "root_type", spec.Type, "children", len(spec.Children))
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("layout.root_id", spec.ID),
+		attribute.String("layout.root_type", string(spec.Type)),
+		attribute.Int("layout.child_count", len(spec.Children)),
+	)
+	s.logger.InfoContext(ctx, "layout", "root_id", spec.ID, "root_type", spec.Type, "children", len(spec.Children))
 
 	s.mu.Lock()
 	if err := s.tree.ReplaceTree(&spec); err != nil {
 		s.mu.Unlock()
-		s.logger.Error("layout: ReplaceTree failed", "error", err)
+		s.logger.ErrorContext(ctx, "layout: ReplaceTree failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 	nodeCount := 0
 	s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
 	s.mu.Unlock()
 
-	s.logger.Info("layout: success", "node_count", nodeCount)
-	s.notifyMutation()
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("layout.node_count", nodeCount))
+	s.logger.InfoContext(ctx, "layout: success", "node_count", nodeCount)
+	s.notifyMutation(ctx)
 	return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 }
 
@@ -847,19 +918,23 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 		}
 	}
 
-	s.logger.Info("set_items", "target", input.Target, "item_count", len(items))
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("items.target", input.Target),
+		attribute.Int("items.count", len(items)),
+	)
+	s.logger.InfoContext(ctx, "set_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
 	err := s.tree.SetItems(input.Target, items)
 	s.mu.Unlock()
 
 	if err != nil {
-		s.logger.Error("set_items: failed", "error", err)
+		s.logger.ErrorContext(ctx, "set_items: failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 
-	s.logger.Info("set_items: success")
-	s.notifyMutation()
+	s.logger.InfoContext(ctx, "set_items: success")
+	s.notifyMutation(ctx)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -883,19 +958,24 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 		}
 	}
 
-	s.logger.Info("append_items", "target", input.Target, "item_count", len(items))
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("items.target", input.Target),
+		attribute.Int("items.count", len(items)),
+		attribute.Bool("items.append", true),
+	)
+	s.logger.InfoContext(ctx, "append_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
 	err := s.tree.AppendItems(input.Target, items)
 	s.mu.Unlock()
 
 	if err != nil {
-		s.logger.Error("append_items: failed", "error", err)
+		s.logger.ErrorContext(ctx, "append_items: failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 
-	s.logger.Info("append_items: success")
-	s.notifyMutation()
+	s.logger.InfoContext(ctx, "append_items: success")
+	s.notifyMutation(ctx)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -919,19 +999,23 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 		}
 	}
 
-	s.logger.Info("remove_items", "target", input.Target, "key_count", len(keys))
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("items.target", input.Target),
+		attribute.Int("items.key_count", len(keys)),
+	)
+	s.logger.InfoContext(ctx, "remove_items", "target", input.Target, "key_count", len(keys))
 
 	s.mu.Lock()
 	err := s.tree.RemoveItems(input.Target, keys)
 	s.mu.Unlock()
 
 	if err != nil {
-		s.logger.Error("remove_items: failed", "error", err)
+		s.logger.ErrorContext(ctx, "remove_items: failed", "error", err)
 		return errResult(err.Error()), nil
 	}
 
-	s.logger.Info("remove_items: success")
-	s.notifyMutation()
+	s.logger.InfoContext(ctx, "remove_items: success")
+	s.notifyMutation(ctx)
 	return jsonResult(okCountResult{OK: true, Removed: len(keys)})
 }
 

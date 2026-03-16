@@ -12,13 +12,20 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	imcp "github.com/joncooper/imagine-tui/internal/mcp"
 	"github.com/joncooper/imagine-tui/internal/render"
+	"github.com/joncooper/imagine-tui/internal/telemetry"
 	"github.com/joncooper/imagine-tui/internal/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+const version = "0.1.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -43,18 +50,13 @@ func main() {
 	}
 }
 
-// initLogger sets up slog to write JSON to the given file path.
-// If logPath is empty, logging is discarded.
-func initLogger(logPath string) (*slog.Logger, func(), error) {
-	if logPath == "" {
-		return slog.New(slog.NewTextHandler(io.Discard, nil)), func() {}, nil
+func shutdownRuntime(rt *telemetry.Runtime) {
+	if rt == nil {
+		return
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open log file: %w", err)
-	}
-	logger := slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return logger, func() { _ = f.Close() }, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = rt.Shutdown(ctx)
 }
 
 func serve(args []string) error {
@@ -65,32 +67,57 @@ func serve(args []string) error {
 		return err
 	}
 
-	logger, closeLog, err := initLogger(*logPath)
+	rt, err := telemetry.New(context.Background(), telemetry.Config{
+		ServiceName:    "imagine-tui",
+		ServiceVersion: version,
+		Command:        "serve",
+		LogPath:        *logPath,
+	})
 	if err != nil {
 		return err
 	}
-	defer closeLog()
+	defer shutdownRuntime(rt)
 
-	logger.Info("starting imagine-tui", "socket", *socketPath)
+	logger := rt.Logger.With(
+		slog.String(telemetry.AttrComponent, "cmd"),
+	)
+	cmdTracer := rt.Tracer("github.com/joncooper/imagine-tui/cmd/imagine-tui")
+	renderTracer := rt.Tracer("github.com/joncooper/imagine-tui/internal/render")
+	ctx, span := cmdTracer.Start(context.Background(), "command.serve")
+	defer span.End()
+	span.SetAttributes(attribute.String(telemetry.AttrSocketPath, *socketPath))
+
+	logger.InfoContext(ctx, "starting imagine-tui", "socket", *socketPath)
 
 	// Create the MCP server.
 	srv, err := imcp.NewServer()
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("create server: %w", err)
 	}
-	srv.SetLogger(logger)
+	srv.SetLogger(logger.With(slog.String(telemetry.AttrComponent, "mcp")))
+	srv.SetTracer(rt.Tracer("github.com/joncooper/imagine-tui/internal/mcp"))
 
 	if *socketPath != "" {
-		return serveSocket(srv, *socketPath, logger)
+		return serveSocket(ctx, cmdTracer, renderTracer, srv, *socketPath, logger)
 	}
-	return serveStdio(srv, logger)
+	return serveStdio(ctx, cmdTracer, renderTracer, srv, logger)
 }
 
 // serveStdio runs MCP over stdin/stdout with BubbleTea on stderr.
-func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
+func serveStdio(rootCtx context.Context, tracer, renderTracer trace.Tracer, srv *imcp.Server, logger *slog.Logger) error {
+	ctx, span := tracer.Start(
+		rootCtx,
+		"serve.stdio",
+		trace.WithAttributes(attribute.String(telemetry.AttrTransport, "stdio")),
+	)
+	defer span.End()
+
 	registry := widget.DefaultRegistry()
 	model := render.NewModel(srv, registry)
-	model.SetLogger(logger)
+	model.SetLogger(logger.With(slog.String(telemetry.AttrComponent, "render")))
+	model.SetTracer(renderTracer)
 
 	// Use stderr for TUI output since stdout is used by MCP stdio transport.
 	program := tea.NewProgram(model,
@@ -102,7 +129,7 @@ func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
 	bridge := render.NewBridge(srv, program)
 	srv.SetOnMutation(bridge.NotifyDOMChanged)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
@@ -110,7 +137,7 @@ func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
 	go func() {
 		select {
 		case <-sigCh:
-			logger.Info("signal received, shutting down")
+			logger.InfoContext(ctx, "signal received, shutting down")
 			srv.Shutdown()
 			program.Send(render.ShutdownMsg{})
 		case <-ctx.Done():
@@ -120,16 +147,30 @@ func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
 	// Start MCP on stdio.
 	mcpErrCh := make(chan error, 1)
 	go func() {
-		logger.Info("MCP server starting on stdio")
-		bridge.NotifyConnected(1)
-		err := srv.MCPServer().Run(ctx, &mcp.StdioTransport{})
+		sessionCtx, sessionSpan := tracer.Start(
+			ctx,
+			"mcp.session.stdio",
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				telemetry.SessionID(1),
+				attribute.String(telemetry.AttrTransport, "stdio"),
+			),
+		)
+		logger.InfoContext(sessionCtx, "MCP server starting on stdio")
+		bridge.NotifyConnected(sessionCtx, 1)
+		err := srv.MCPServer().Run(sessionCtx, &mcp.StdioTransport{})
 		mcpErrCh <- err
-		logger.Info("MCP stdio session ended", "error", err)
-		if err != nil && err != io.EOF {
-			bridge.NotifyDisconnected(1, err)
-		} else {
-			bridge.NotifyDisconnected(1, nil)
+		if err != nil && err != io.EOF && err != context.Canceled {
+			sessionSpan.RecordError(err)
+			sessionSpan.SetStatus(codes.Error, err.Error())
 		}
+		logger.InfoContext(sessionCtx, "MCP stdio session ended", "error", err)
+		if err != nil && err != io.EOF {
+			bridge.NotifyDisconnected(sessionCtx, 1, err)
+		} else {
+			bridge.NotifyDisconnected(sessionCtx, 1, nil)
+		}
+		sessionSpan.End()
 	}()
 
 	// Run BubbleTea (blocks until quit).
@@ -149,14 +190,28 @@ func serveStdio(srv *imcp.Server, logger *slog.Logger) error {
 }
 
 // serveSocket runs MCP over a Unix domain socket with BubbleTea on stdout.
-func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error {
+func serveSocket(rootCtx context.Context, tracer, renderTracer trace.Tracer, srv *imcp.Server, socketPath string, logger *slog.Logger) error {
+	ctx, span := tracer.Start(
+		rootCtx,
+		"serve.socket",
+		trace.WithAttributes(
+			attribute.String(telemetry.AttrTransport, "unix"),
+			attribute.String(telemetry.AttrSocketPath, socketPath),
+		),
+	)
+	defer span.End()
+
 	// Clean up stale socket file.
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("remove stale socket: %w", err)
 	}
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("listen on %s: %w", socketPath, err)
 	}
 	defer func() { _ = listener.Close() }()
@@ -164,7 +219,8 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 
 	registry := widget.DefaultRegistry()
 	model := render.NewModel(srv, registry)
-	model.SetLogger(logger)
+	model.SetLogger(logger.With(slog.String(telemetry.AttrComponent, "render")))
+	model.SetTracer(renderTracer)
 
 	// BubbleTea uses stdout directly — no MCP contention on stdio.
 	program := tea.NewProgram(model,
@@ -175,7 +231,7 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 	bridge := render.NewBridge(srv, program)
 	srv.SetOnMutation(bridge.NotifyDOMChanged)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
@@ -183,7 +239,7 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 	go func() {
 		select {
 		case <-sigCh:
-			logger.Info("signal received, shutting down")
+			logger.InfoContext(ctx, "signal received, shutting down")
 			srv.Shutdown()
 			program.Send(render.ShutdownMsg{})
 			_ = listener.Close()
@@ -197,15 +253,15 @@ func serveSocket(srv *imcp.Server, socketPath string, logger *slog.Logger) error
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				logger.Debug("accept ended", "error", err)
+				logger.DebugContext(ctx, "accept ended", "error", err)
 				return // listener closed
 			}
-			logger.Info("client connected", "remote", conn.RemoteAddr())
-			go handleConnection(ctx, srv, bridge, owners, conn, logger)
+			logger.InfoContext(ctx, "client connected", "remote", conn.RemoteAddr())
+			go handleConnection(ctx, tracer, srv, bridge, owners, conn, logger)
 		}
 	}()
 
-	logger.Info("listening", "socket", socketPath)
+	logger.InfoContext(ctx, "listening", "socket", socketPath)
 	fmt.Fprintf(os.Stderr, "Listening on %s\n", socketPath)
 
 	// Run BubbleTea (blocks until quit).
@@ -242,38 +298,55 @@ func (g *ownerGate) Release(id uint64) bool {
 	return true
 }
 
-func handleConnection(ctx context.Context, srv *imcp.Server, bridge *render.Bridge, owners *ownerGate, conn net.Conn, logger *slog.Logger) {
+func handleConnection(ctx context.Context, tracer trace.Tracer, srv *imcp.Server, bridge *render.Bridge, owners *ownerGate, conn net.Conn, logger *slog.Logger) {
 	defer func() { _ = conn.Close() }()
 
 	sessionID, ok := owners.TryClaim()
 	if !ok {
-		logger.Warn("owner rejected", "remote", conn.RemoteAddr())
+		logger.WarnContext(ctx, "owner rejected", "remote", conn.RemoteAddr())
 		return
 	}
+	sessionCtx, sessionSpan := tracer.Start(
+		ctx,
+		"mcp.session.socket",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(
+			telemetry.SessionID(sessionID),
+			attribute.String(telemetry.AttrTransport, "unix"),
+			attribute.String("net.peer.address", conn.RemoteAddr().String()),
+		),
+	)
+	defer sessionSpan.End()
 
 	transport := &mcp.IOTransport{
 		Reader: conn,
 		Writer: conn,
 	}
 
-	session, err := srv.MCPServer().Connect(ctx, transport, nil)
+	session, err := srv.MCPServer().Connect(sessionCtx, transport, nil)
 	if err != nil {
 		owners.Release(sessionID)
-		logger.Error("MCP connect failed", "error", err)
+		sessionSpan.RecordError(err)
+		sessionSpan.SetStatus(codes.Error, err.Error())
+		logger.ErrorContext(sessionCtx, "MCP connect failed", "error", err)
 		return
 	}
 
-	bridge.NotifyConnected(sessionID)
+	bridge.NotifyConnected(sessionCtx, sessionID)
 	if sessionID == 1 {
-		logger.Info("owner attached", "session_id", sessionID)
+		logger.InfoContext(sessionCtx, "owner attached", "session_id", sessionID)
 	} else {
-		logger.Info("owner reattached", "session_id", sessionID)
+		logger.InfoContext(sessionCtx, "owner reattached", "session_id", sessionID)
 	}
 
 	err = session.Wait()
-	logger.Info("MCP session ended", "session_id", sessionID, "error", err)
+	if err != nil && err != io.EOF && err != context.Canceled {
+		sessionSpan.RecordError(err)
+		sessionSpan.SetStatus(codes.Error, err.Error())
+	}
+	logger.InfoContext(sessionCtx, "MCP session ended", "session_id", sessionID, "error", err)
 	if owners.Release(sessionID) {
-		bridge.NotifyDisconnected(sessionID, err)
+		bridge.NotifyDisconnected(sessionCtx, sessionID, err)
 	}
 }
 
@@ -285,13 +358,51 @@ func connectCmd(args []string) error {
 	}
 	socketPath := args[0]
 
+	rt, err := telemetry.New(context.Background(), telemetry.Config{
+		ServiceName:    "imagine-tui",
+		ServiceVersion: version,
+		Command:        "connect",
+	})
+	if err != nil {
+		return err
+	}
+	defer shutdownRuntime(rt)
+
+	logger := rt.Logger.With(slog.String(telemetry.AttrComponent, "cmd"))
+	tracer := rt.Tracer("github.com/joncooper/imagine-tui/cmd/imagine-tui")
+	ctx, span := tracer.Start(
+		context.Background(),
+		"command.connect",
+		trace.WithAttributes(attribute.String(telemetry.AttrSocketPath, socketPath)),
+	)
+	defer span.End()
+
 	// Check if the socket file exists before attempting to dial.
 	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("socket %s does not exist — start the server first: imagine-tui serve -socket %s", socketPath, socketPath)
 	}
 
+	dialCtx, dialSpan := tracer.Start(
+		ctx,
+		"connect.dial",
+		trace.WithAttributes(
+			attribute.String(telemetry.AttrTransport, "unix"),
+			attribute.String(telemetry.AttrSocketPath, socketPath),
+		),
+	)
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
+		dialSpan.RecordError(err)
+		dialSpan.SetStatus(codes.Error, err.Error())
+	} else {
+		logger.InfoContext(dialCtx, "connected to socket", "socket", socketPath)
+	}
+	dialSpan.End()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("dial %s: %w (is the server running?)", socketPath, err)
 	}
 	defer func() { _ = conn.Close() }()
@@ -299,14 +410,32 @@ func connectCmd(args []string) error {
 	// Bidirectional copy: stdin → socket, socket → stdout.
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(conn, os.Stdin)
+		_, err := copyWithSpan(ctx, tracer, "connect.copy.stdin_to_socket", conn, os.Stdin)
 		errCh <- err
 	}()
 	go func() {
-		_, err := io.Copy(os.Stdout, conn)
+		_, err := copyWithSpan(ctx, tracer, "connect.copy.socket_to_stdout", os.Stdout, conn)
 		errCh <- err
 	}()
 
 	// Wait for either direction to finish.
-	return <-errCh
+	err = <-errCh
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+func copyWithSpan(ctx context.Context, tracer trace.Tracer, name string, dst io.Writer, src io.Reader) (int64, error) {
+	_, span := tracer.Start(ctx, name)
+	defer span.End()
+
+	n, err := io.Copy(dst, src)
+	span.SetAttributes(attribute.Int64("io.copy.bytes", n))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return n, err
 }

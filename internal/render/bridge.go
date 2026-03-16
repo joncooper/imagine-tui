@@ -1,6 +1,8 @@
 package render
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 	imcp "github.com/joncooper/imagine-tui/internal/mcp"
 )
@@ -19,7 +21,7 @@ type Bridge struct {
 
 	// OnMutation is an optional callback invoked before sending DOMChangedMsg.
 	// Useful for syncing the widget tree or running scripts.
-	OnMutation func()
+	OnMutation func(context.Context)
 }
 
 // NewBridge creates a bridge between the MCP server and BubbleTea program.
@@ -37,19 +39,19 @@ func (b *Bridge) Server() *imcp.Server {
 
 // NotifyDOMChanged notifies the BubbleTea program that the DOM has changed.
 // Called by MCP tool handlers after patch/replace/restore operations.
-func (b *Bridge) NotifyDOMChanged() {
+func (b *Bridge) NotifyDOMChanged(ctx context.Context) {
 	if b.OnMutation != nil {
-		b.OnMutation()
+		b.OnMutation(ctx)
 	}
-	b.program.Send(DOMChangedMsg{})
+	b.program.Send(DOMChangedMsg{Ctx: ctx})
 }
 
 // NotifyConnected notifies the BubbleTea program that a new MCP client connected.
-func (b *Bridge) NotifyConnected(sessionID uint64) {
-	b.program.Send(MCPConnectedMsg{SessionID: sessionID})
+func (b *Bridge) NotifyConnected(ctx context.Context, sessionID uint64) {
+	b.program.Send(MCPConnectedMsg{SessionID: sessionID, Ctx: ctx})
 }
 
 // NotifyDisconnected notifies the BubbleTea program that MCP has disconnected.
-func (b *Bridge) NotifyDisconnected(sessionID uint64, err error) {
-	b.program.Send(MCPDisconnectedMsg{SessionID: sessionID, Err: err})
+func (b *Bridge) NotifyDisconnected(ctx context.Context, sessionID uint64, err error) {
+	b.program.Send(MCPDisconnectedMsg{SessionID: sessionID, Err: err, Ctx: ctx})
 }

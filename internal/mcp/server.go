@@ -14,8 +14,12 @@ import (
 	"time"
 
 	"github.com/joncooper/imagine-tui/internal/dom"
+	iotel "github.com/joncooper/imagine-tui/internal/otel"
 	"github.com/joncooper/imagine-tui/internal/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ToolHandler is the signature for a tool handler function.
@@ -392,19 +396,23 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.patch")
+	defer span.End()
+
 	var input patchInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if len(input.Ops) == 0 {
-		return errResult("missing required parameter: ops"), nil
+		return spanErr(span, "missing required parameter: ops"), nil
 	}
 
 	ops, err := dom.ParsePatchOps(input.Ops)
 	if err != nil {
-		return errResult(fmt.Sprintf("invalid ops: %v", err)), nil
+		return spanErr(span, fmt.Sprintf("invalid ops: %v", err)), nil
 	}
 
+	span.SetAttributes(attribute.Int("mcp.op_count", len(ops)))
 	s.logger.Info("patch", "op_count", len(ops))
 
 	s.mu.Lock()
@@ -413,7 +421,7 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 
 	if err != nil {
 		s.logger.Error("patch: failed", "error", err)
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	s.logger.Info("patch: success")
@@ -426,10 +434,15 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.replace")
+	defer span.End()
+
 	var input replaceInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
+
+	span.SetAttributes(attribute.String("mcp.target_id", input.TargetID))
 
 	s.mu.Lock()
 
@@ -437,25 +450,26 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		// Whole-tree replacement.
 		if len(input.Tree) == 0 {
 			s.mu.Unlock()
-			return errResult("replace requires either target_id or tree"), nil
+			return spanErr(span, "replace requires either target_id or tree"), nil
 		}
 		var spec dom.NodeSpec
 		if err := json.Unmarshal(input.Tree, &spec); err != nil {
 			s.mu.Unlock()
 			s.logger.Error("replace: invalid tree spec", "error", err)
-			return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
+			return spanErr(span, fmt.Sprintf("invalid tree spec: %v", err)), nil
 		}
 		childCount := len(spec.Children)
 		s.logger.Info("replace: whole tree", "root_id", spec.ID, "root_type", spec.Type, "children", childCount)
 		if err := s.tree.ReplaceTree(&spec); err != nil {
 			s.mu.Unlock()
 			s.logger.Error("replace: ReplaceTree failed", "error", err)
-			return errResult(err.Error()), nil
+			return spanErr(span, err.Error()), nil
 		}
 		nodeCount := 0
 		s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
 		summary := s.tree.Summary()
 		s.mu.Unlock()
+		span.SetAttributes(attribute.Int("mcp.node_count", nodeCount))
 		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
 		s.notifyMutation()
 		return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
@@ -464,18 +478,21 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	// Subtree replacement.
 	if len(input.Children) == 0 {
 		s.mu.Unlock()
-		return errResult("replace with target_id requires children"), nil
+		return spanErr(span, "replace with target_id requires children"), nil
 	}
 	var specs []*dom.NodeSpec
 	if err := json.Unmarshal(input.Children, &specs); err != nil {
 		s.mu.Unlock()
-		return errResult(fmt.Sprintf("invalid children: %v", err)), nil
+		return spanErr(span, fmt.Sprintf("invalid children: %v", err)), nil
 	}
 	if err := s.tree.Replace(input.TargetID, specs); err != nil {
 		s.mu.Unlock()
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
+	nodeCount := 0
+	s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
 	s.mu.Unlock()
+	span.SetAttributes(attribute.Int("mcp.node_count", nodeCount))
 
 	s.notifyMutation()
 	return jsonResult(okResult{OK: true})
@@ -486,10 +503,15 @@ func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest)
 		return errResult("server is shutting down"), nil
 	}
 
+	ctx, span := iotel.Tracer().Start(ctx, "mcp.await_event")
+	defer span.End()
+
 	var input awaitEventInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
+
+	span.SetAttributes(attribute.Int("mcp.timeout_ms", input.TimeoutMs))
 
 	// Build dequeue context with timeout.
 	deqCtx := ctx
@@ -508,10 +530,13 @@ func (s *Server) handleAwaitEvent(ctx context.Context, req *mcp.CallToolRequest)
 	if err != nil {
 		// Check if this was a timeout.
 		if deqCtx.Err() != nil && input.TimeoutMs > 0 {
+			span.SetAttributes(attribute.Bool("mcp.timed_out", true))
 			return jsonResult(timeoutResult{Timeout: true})
 		}
-		return errResult(fmt.Sprintf("await_event: %v", err)), nil
+		return spanErr(span, fmt.Sprintf("await_event: %v", err)), nil
 	}
+
+	span.SetAttributes(attribute.Bool("mcp.timed_out", false))
 
 	// Enrich with DOM summary if not already present.
 	if evt.DOMSummary == "" {
@@ -528,19 +553,24 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.snapshot")
+	defer span.End()
+
 	var input nameInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if input.Name == "" {
-		return errResult("missing required parameter: name"), nil
+		return spanErr(span, "missing required parameter: name"), nil
 	}
+
+	span.SetAttributes(attribute.String("mcp.snapshot_name", input.Name))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := s.snaps.Snapshot(input.Name, s.tree); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	return jsonResult(okNameResult{OK: true, Name: input.Name})
@@ -551,20 +581,25 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.restore")
+	defer span.End()
+
 	var input nameInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if input.Name == "" {
-		return errResult("missing required parameter: name"), nil
+		return spanErr(span, "missing required parameter: name"), nil
 	}
+
+	span.SetAttributes(attribute.String("mcp.snapshot_name", input.Name))
 
 	s.mu.Lock()
 	err := s.snaps.Restore(input.Name, s.tree)
 	s.mu.Unlock()
 
 	if err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	s.notifyMutation()
@@ -576,12 +611,15 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.query")
+	defer span.End()
+
 	var input queryInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if len(input.IDs) == 0 {
-		return errResult("missing required parameter: ids"), nil
+		return spanErr(span, "missing required parameter: ids"), nil
 	}
 
 	s.logger.Info("query", "ids", input.IDs, "tree_summary", s.tree.Summary())
@@ -589,6 +627,8 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	s.mu.Lock()
 	results, errs := s.tree.Query(input.IDs)
 	s.mu.Unlock()
+
+	span.SetAttributes(attribute.Int("mcp.result_count", len(results)))
 
 	resp := queryResult{Results: results}
 	if len(errs) > 0 {
@@ -661,17 +701,22 @@ type describeWidgetsInput struct {
 	Type string `json:"type"`
 }
 
-func (s *Server) handleDescribeWidgets(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleDescribeWidgets(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_, span := iotel.Tracer().Start(ctx, "mcp.describe_widgets")
+	defer span.End()
+
 	var input describeWidgetsInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
+
+	span.SetAttributes(attribute.String("mcp.widget_type", input.Type))
 
 	if input.Type != "" {
 		catalog := widget.CatalogMap()
 		info, ok := catalog[input.Type]
 		if !ok {
-			return errResult(fmt.Sprintf("unknown widget type %q", input.Type)), nil
+			return spanErr(span, fmt.Sprintf("unknown widget type %q", input.Type)), nil
 		}
 		return jsonResult(info)
 	}
@@ -787,7 +832,10 @@ func scriptingCatalog() *scriptingInfo {
 	}
 }
 
-func (s *Server) handleDescribeScripting(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleDescribeScripting(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_, span := iotel.Tracer().Start(ctx, "mcp.describe_scripting")
+	defer span.End()
+
 	return jsonResult(scriptingCatalog())
 }
 
@@ -796,27 +844,31 @@ func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*m
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.layout")
+	defer span.End()
+
 	var input layoutInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if len(input.Tree) == 0 {
-		return errResult("missing required parameter: tree"), nil
+		return spanErr(span, "missing required parameter: tree"), nil
 	}
 
 	var spec dom.NodeSpec
 	if err := json.Unmarshal(input.Tree, &spec); err != nil {
 		s.logger.Error("layout: invalid tree spec", "error", err)
-		return errResult(fmt.Sprintf("invalid tree spec: %v", err)), nil
+		return spanErr(span, fmt.Sprintf("invalid tree spec: %v", err)), nil
 	}
 
+	span.SetAttributes(attribute.String("mcp.root_id", spec.ID))
 	s.logger.Info("layout", "root_id", spec.ID, "root_type", spec.Type, "children", len(spec.Children))
 
 	s.mu.Lock()
 	if err := s.tree.ReplaceTree(&spec); err != nil {
 		s.mu.Unlock()
 		s.logger.Error("layout: ReplaceTree failed", "error", err)
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	nodeCount := 0
 	s.tree.Walk(func(n *dom.Node) bool { nodeCount++; return true })
@@ -832,21 +884,28 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.set_items")
+	defer span.End()
+
 	var input setItemsInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if input.Target == "" {
-		return errResult("missing required parameter: target"), nil
+		return spanErr(span, "missing required parameter: target"), nil
 	}
 
 	var items []map[string]any
 	if len(input.Items) > 0 {
 		if err := json.Unmarshal(input.Items, &items); err != nil {
-			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
+			return spanErr(span, fmt.Sprintf("invalid items: %v", err)), nil
 		}
 	}
 
+	span.SetAttributes(
+		attribute.String("mcp.target", input.Target),
+		attribute.Int("mcp.item_count", len(items)),
+	)
 	s.logger.Info("set_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
@@ -855,7 +914,7 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 
 	if err != nil {
 		s.logger.Error("set_items: failed", "error", err)
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	s.logger.Info("set_items: success")
@@ -868,21 +927,28 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.append_items")
+	defer span.End()
+
 	var input setItemsInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if input.Target == "" {
-		return errResult("missing required parameter: target"), nil
+		return spanErr(span, "missing required parameter: target"), nil
 	}
 
 	var items []map[string]any
 	if len(input.Items) > 0 {
 		if err := json.Unmarshal(input.Items, &items); err != nil {
-			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
+			return spanErr(span, fmt.Sprintf("invalid items: %v", err)), nil
 		}
 	}
 
+	span.SetAttributes(
+		attribute.String("mcp.target", input.Target),
+		attribute.Int("mcp.item_count", len(items)),
+	)
 	s.logger.Info("append_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
@@ -891,7 +957,7 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 
 	if err != nil {
 		s.logger.Error("append_items: failed", "error", err)
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	s.logger.Info("append_items: success")
@@ -904,21 +970,28 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 		return errResult("server is shutting down"), nil
 	}
 
+	_, span := iotel.Tracer().Start(ctx, "mcp.remove_items")
+	defer span.End()
+
 	var input removeItemsInput
 	if err := unmarshalArgs(req, &input); err != nil {
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 	if input.Target == "" {
-		return errResult("missing required parameter: target"), nil
+		return spanErr(span, "missing required parameter: target"), nil
 	}
 
 	var keys []string
 	if len(input.Keys) > 0 {
 		if err := json.Unmarshal(input.Keys, &keys); err != nil {
-			return errResult(fmt.Sprintf("invalid keys: %v", err)), nil
+			return spanErr(span, fmt.Sprintf("invalid keys: %v", err)), nil
 		}
 	}
 
+	span.SetAttributes(
+		attribute.String("mcp.target", input.Target),
+		attribute.Int("mcp.key_count", len(keys)),
+	)
 	s.logger.Info("remove_items", "target", input.Target, "key_count", len(keys))
 
 	s.mu.Lock()
@@ -927,7 +1000,7 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 
 	if err != nil {
 		s.logger.Error("remove_items: failed", "error", err)
-		return errResult(err.Error()), nil
+		return spanErr(span, err.Error()), nil
 	}
 
 	s.logger.Info("remove_items: success")
@@ -942,6 +1015,11 @@ func unmarshalArgs(req *mcp.CallToolRequest, v any) error {
 		return nil
 	}
 	return json.Unmarshal(req.Params.Arguments, v)
+}
+
+func spanErr(span trace.Span, msg string) *mcp.CallToolResult {
+	span.SetStatus(codes.Error, msg)
+	return errResult(msg)
 }
 
 func errResult(msg string) *mcp.CallToolResult {

@@ -12,9 +12,11 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	imcp "github.com/joncooper/imagine-tui/internal/mcp"
+	iotel "github.com/joncooper/imagine-tui/internal/otel"
 	"github.com/joncooper/imagine-tui/internal/render"
 	"github.com/joncooper/imagine-tui/internal/widget"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -72,6 +74,17 @@ func serve(args []string) error {
 	defer closeLog()
 
 	logger.Info("starting imagine-tui", "socket", *socketPath)
+
+	// Initialize OpenTelemetry (no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset).
+	otelShutdown, err := iotel.Init(context.Background(), "imagine-tui", "0.1.0")
+	if err != nil {
+		return fmt.Errorf("init otel: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(ctx)
+	}()
 
 	// Create the MCP server.
 	srv, err := imcp.NewServer()

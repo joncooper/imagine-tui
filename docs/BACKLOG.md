@@ -68,6 +68,10 @@ Registry, rendering pipeline, 11 v1 widgets (container, text, input, textarea, s
 BubbleTea model & update loop, focus management (FocusRing with Tab/Shift-Tab, container trapping), MCP↔BubbleTea bridge (DOMChangedMsg, CallTool), terminal resize, startup & shutdown (stdio MCP + stderr BubbleTea alt screen, signal handling, broken pipe detection). 43 tests, 88% coverage on render package.
 5 tickets, all complete.
 
+### M5a: Ecosystem widgets, timers, overflow scrolling, reactive state ✅
+
+Container overflow scrolling with viewport integration (#16). Reactive script state with computed propagation and cross-node state access (#17). Script runtime timers — setTimeout/setInterval with safety limits, auto-cancel on node removal, BubbleTea tick integration (#15). Ecosystem widgets — markdown (glamour), progress bar, sparkline, spinner — with golden file tests (#20). Automatic computed propagation after script/timer execution, dependency graph with cycle detection.
+
 ---
 
 ## Active milestones
@@ -123,8 +127,7 @@ Design doc: [docs/demos/test-whisperer.md](demos/test-whisperer.md)
 
 #### M7-2: Living dashboard demo
 Design doc: [docs/demos/living-dashboard.md](demos/living-dashboard.md)
-- Multi-MCP-server orchestration, sparkline (may need v2 widget), container layout
-- Requires sparkline widget implementation (promote from v2 if not already done)
+- Multi-MCP-server orchestration, sparkline, container layout
 
 #### M7-3: Log detective demo
 Design doc: [docs/demos/log-detective.md](demos/log-detective.md)
@@ -137,17 +140,6 @@ Design doc: [docs/demos/log-detective.md](demos/log-detective.md)
 
 Items not tied to a milestone. Will be scheduled as needed.
 
-### Container viewport & overflow scrolling
-- Add `height` / `max_height` props to containers (fixed int or percentage)
-- Add `overflow` prop: `"scroll"` wraps children in a bubbletea viewport
-- Without this, tall content pushes the entire screen down instead of scrolling within its panel
-- Discovered during live demo: log/narrative panels overflow their containers
-- **Implementation**: wrap container rendering in `viewport.Model` when `overflow: "scroll"` and height is constrained
-- **Runtime note**: overflow-scrolling containers must be keyboard-focusable alongside the existing scrollable widget defaults (`log`, `code`)
-- **Future follow-up**: add a clearer focus-policy API for passive scroll panes so logs/code blocks can opt out of Tab order without relying on the generic `focusable` override
-- **Scope note**: keep scroll position as widget-local runtime state for now; snapshot/query serialization can be handled separately
-- **TDD**: golden file tests for constrained containers, overflow clipping
-
 ### Flex layout & layout managers
 - Flex grow/shrink (one panel fills remaining space after siblings)
 - Min/max width constraints on containers
@@ -156,44 +148,37 @@ Items not tied to a milestone. Will be scheduled as needed.
 - **Implementation**: lipgloss `Place` + custom flex algorithm, or adopt a layout library
 - **TDD**: layout calculation unit tests for grow/shrink/wrap scenarios
 
-### Script runtime: state in computed props & cross-node state
-- Top-level `state` reads in computed props landed on 2026-03-13
-- `$('other-node').state` is now available for cross-node local state sharing
-- Eliminates the hidden-input workaround for shared reactive state
-- Key enabler for client-side-heavy UIs (games, dashboards with complex local logic)
-- Current limit: nested object mutation is not tracked yet; only top-level reads/writes are reactive
-- **TDD**: computed prop reads state, cross-node state access, reactivity triggers
-
-### Script runtime: timers (setTimeout/setInterval)
-- Sandboxed short-duration timers for animations and timed events
-- Combat damage flash, countdown timers, progress animations
-- Must integrate with bubbletea's `tea.Tick` command pattern
-- Safety: max duration cap, max concurrent timers, auto-cancel on node removal
-- **TDD**: timer fires, timer cancels on remove, max limits enforced
-
 ### Script runtime follow-ups
-- Automatic computed propagation after script execution
-- Note: dirty tracking exists now, but some paths still rely on callers to trigger propagation explicitly. Push this into the runtime so hooks/state writes behave consistently.
 - Current-node dependency tracking for `$.…` reads
 - Note: `$('id')` and top-level `state` reads are tracked, but self-reads like `$.value` and `$.props.foo` should also register dependencies so computed props re-run when the same node changes.
 - Runtime/script-state introspection for clients
 - Note: extend `query` or add a small runtime inspection tool so clients can debug `state` and computed behavior without guessing.
 - Richer `describe_scripting` payloads
 - Note: add hook payload schemas and concrete examples per hook/widget so clients know what `event` contains and how to compose local logic.
-- Timers / `on_tick`
-- Note: highest-leverage new feature after reactivity correctness. Keep hard caps, cleanup on node removal, and Bubble Tea integration.
 - Session persistence for script state
 - Note: once state becomes a real local data store, snapshots/restarts should include it.
 - Nested reactive state
 - Note: defer until there is real pressure from demos or clients. Recursive proxies add complexity and overhead fast.
 
-### BubbleTea ecosystem widget integration
-- Progress bar widget (from `bubbles/progress`)
-- Spinner widget (from `bubbles/spinner`)
-- Markdown/glamour widget (from `glamour`)
-- Sparkline widget (needed for M7 living dashboard)
-- Each maps to a new widget type in the registry
-- **TDD**: golden file tests per new widget type
+### OpenTelemetry: cross-process trace correlation
+- Extract W3C `traceparent` from MCP `_meta` field to link imagine-tui spans as children of Claude Code spans
+- Requires Claude Code to inject `traceparent` into MCP tool call metadata (check MCP SDK support)
+- Add middleware in `NewServer()` via `AddReceivingMiddleware` to extract/inject trace context
+- Result: Jaeger shows unified traces spanning Claude Code → MCP tool call → DOM mutation
+- **Depends on**: Phase 1 OTEL instrumentation (internal/otel + MCP handler spans)
+
+### OpenTelemetry: render loop & script spans
+- Add spans for BubbleTea `View()`, `Update()`, `syncState()` in `internal/render/model.go`
+- Challenge: BubbleTea's `tea.Model` interface methods don't take `context.Context`; need to thread context via the Model struct or use span links
+- Add spans for script execution: `ExecHook()`, `EvalAllComputed()`, `RunDueTimers()` in `internal/script/`
+- Add sub-spans for DOM operations: `Tree.Patch()`, `Tree.Insert()`, `Tree.Remove()` in `internal/dom/`
+- **Priority**: render View() span is highest value (16ms frame budget); script/DOM spans are nice-to-have
+
+### OpenTelemetry: metrics
+- Add OTEL metrics alongside traces: MCP tool call counts, error rates, render frame duration histogram, event queue depth
+- Use `go.opentelemetry.io/otel/metric` with OTLP exporter
+- Jaeger all-in-one supports metrics via Prometheus endpoint
+- **Depends on**: Phase 1 OTEL instrumentation
 
 ### TSX fragment runtime
 - Implement the JSX transform in the goja layer

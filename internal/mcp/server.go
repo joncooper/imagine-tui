@@ -21,6 +21,16 @@ import (
 // ToolHandler is the signature for a tool handler function.
 type ToolHandler = func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
+// MutationKind describes how a successful tool call changed the DOM.
+type MutationKind string
+
+const (
+	// MutationKindUpdate preserves focus when the focused node is still valid.
+	MutationKindUpdate MutationKind = "update"
+	// MutationKindResetFocus reinitializes focus from initial_focus / DOM order.
+	MutationKindResetFocus MutationKind = "reset_focus"
+)
+
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
 type Server struct {
 	mu         sync.RWMutex
@@ -30,7 +40,7 @@ type Server struct {
 	srv        *mcp.Server
 	handlers   map[string]ToolHandler // tool name -> handler, for direct invocation
 	shutdown   chan struct{}
-	onMutation func() // called after DOM-mutating operations (patch, replace, restore)
+	onMutation func(MutationKind) // called after successful DOM mutations
 	logger     *slog.Logger
 }
 
@@ -41,14 +51,14 @@ func (s *Server) SetLogger(l *slog.Logger) {
 
 // SetOnMutation registers a callback that fires after successful DOM mutations.
 // Used to notify BubbleTea of DOM changes so it can re-render.
-func (s *Server) SetOnMutation(fn func()) {
+func (s *Server) SetOnMutation(fn func(MutationKind)) {
 	s.onMutation = fn
 }
 
 // notifyMutation calls the mutation callback if one is registered.
-func (s *Server) notifyMutation() {
+func (s *Server) notifyMutation(kind MutationKind) {
 	if s.onMutation != nil {
-		s.onMutation()
+		s.onMutation(kind)
 	}
 }
 
@@ -59,7 +69,7 @@ const serverInstructions = `imagine-tui is an MCP server that renders interactiv
 ## Getting started
 1. Call describe_widgets to discover available widget types, their props, and events.
 2. Call layout to define your UI structure as a tree of widgets.
-3. Call set_items to populate list or table widgets with data.
+3. Call set_items to populate list, table, log, or templated container widgets with data.
 4. Call await_event to wait for user interaction, then respond by updating the UI.
 
 ## Key tools
@@ -83,10 +93,20 @@ table (sortable, expandable rows), button, input, textarea, select, code, log,
 diff, progress, spinner, markdown, and sparkline.
 Call describe_widgets for full details on any widget type.
 
+## Focus and keyboard
+- Focus starts on the first focusable node in DOM order after layout/replace.
+- Tab and Shift-Tab cycle through focusable widgets.
+- Arrow keys and Enter are routed only to the currently focused widget.
+- To override DOM-order focus after layout, set root props.initial_focus to a focusable node ID.
+- Call describe_widgets for per-widget key bindings, focus rules, and examples.
+
 ## Data pattern
 For data-heavy UIs, use layout + set_items instead of generating large JSON patches.
 Define the structure once with layout, then send compact data arrays with set_items.
+set_items accepts inline items only.
+For large local datasets, keep file access on the caller side: if the server is running on a Unix socket, use imagine-tui push-items --socket <socket-path> --target <id> --file <path> [--format json|jsonl|ndjson] instead of pasting file contents into tool arguments.
 For log widgets, use append_items to add new lines without resending the entire array.
+push-items supports JSON arrays and JSONL/NDJSON. Raw text log parsing is not supported yet; convert logs to JSON or JSONL first.
 This is 10-20x fewer tokens than raw DOM manipulation.`
 
 // NewServer creates a new MCP server with all tool declarations registered.
@@ -218,6 +238,8 @@ type layoutInput struct {
 type setItemsInput struct {
 	Target string          `json:"target"`
 	Items  json.RawMessage `json:"items"`
+	File   string          `json:"file,omitempty"`
+	Format string          `json:"format,omitempty"`
 }
 
 type removeItemsInput struct {
@@ -417,7 +439,7 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	}
 
 	s.logger.Info("patch: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -457,7 +479,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		summary := s.tree.Summary()
 		s.mu.Unlock()
 		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
-		s.notifyMutation()
+		s.notifyMutation(MutationKindResetFocus)
 		return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 	}
 
@@ -477,7 +499,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 	s.mu.Unlock()
 
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -567,7 +589,7 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 		return errResult(err.Error()), nil
 	}
 
-	s.notifyMutation()
+	s.notifyMutation(MutationKindResetFocus)
 	return jsonResult(okNameResult{OK: true, Restored: input.Name})
 }
 
@@ -617,11 +639,11 @@ func layoutTool() *mcp.Tool {
 func setItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "set_items",
-		Description: "Populate a list, table, log, or templated container with data. For list nodes: items are {id, label, badge, style}. For table nodes: items are row objects. For log nodes: items are {text, level, timestamp}. For containers with item_template: items are expanded through the template. Replaces all existing items.",
+		Description: "Populate a list, table, log, or templated container with inline data. For large local datasets, prefer the caller-side helper imagine-tui push-items --socket <socket-path> --target <id> --file <path> [--format json|jsonl|ndjson] when the server is running on a Unix socket. Replaces all existing items.",
 		InputSchema: schema(map[string]JSONSchema{
-			"target": {Type: "string", Description: "ID of the list node or container with item_template"},
-			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders."},
-		}, "target", "items"),
+			"target": {Type: "string", Description: "ID of the list, table, log node, or container with item_template"},
+			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders. Required for set_items."},
+		}, "target"),
 	}
 }
 
@@ -650,7 +672,7 @@ func removeItemsTool() *mcp.Tool {
 func describeWidgetsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_widgets",
-		Description: "List available widget types with their props, events, and capabilities. Call this before building a UI to discover what widgets you can use. Optionally filter by type.",
+		Description: "List available widget types with their props, events, capabilities, key bindings, focus behavior, layout gotchas, and examples. Call this before building a UI. Optionally filter by type.",
 		InputSchema: schema(map[string]JSONSchema{
 			"type": {Type: "string", Description: "Optional: filter to a specific widget type (e.g. \"list\", \"table\")"},
 		}),
@@ -823,7 +845,7 @@ func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*m
 	s.mu.Unlock()
 
 	s.logger.Info("layout: success", "node_count", nodeCount)
-	s.notifyMutation()
+	s.notifyMutation(MutationKindResetFocus)
 	return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 }
 
@@ -840,17 +862,15 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult("missing required parameter: target"), nil
 	}
 
-	var items []map[string]any
-	if len(input.Items) > 0 {
-		if err := json.Unmarshal(input.Items, &items); err != nil {
-			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
-		}
+	items, err := loadSetItemsItems(input)
+	if err != nil {
+		return errResult(err.Error()), nil
 	}
 
 	s.logger.Info("set_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
-	err := s.tree.SetItems(input.Target, items)
+	err = s.tree.SetItems(input.Target, items)
 	s.mu.Unlock()
 
 	if err != nil {
@@ -859,7 +879,7 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 	}
 
 	s.logger.Info("set_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -895,7 +915,7 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	s.logger.Info("append_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -931,7 +951,7 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	s.logger.Info("remove_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Removed: len(keys)})
 }
 

@@ -85,21 +85,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DOMChangedMsg:
 		m.logger.Info("DOM changed, syncing state")
+		if msg.MutationKind == imcp.MutationKindResetFocus {
+			m.focusedID = ""
+		}
 		cmd, err := m.refreshScriptsAndWidgets()
 		if err != nil {
 			m.logger.Error("script sync failed", "error", err)
 			cmd = m.syncState()
 		}
-		// If focused node was removed, adjust focus.
-		if m.focusedID != "" && !m.focus.Contains(m.focusedID) {
-			m.focusedID = m.focus.Next("")
-			m.logger.Info("focus adjusted (removed node)", "new_focus", m.focusedID)
-		}
-		// Auto-focus first element if nothing is focused.
-		if m.focusedID == "" && len(m.focus.IDs) > 0 {
-			m.focusedID = m.focus.IDs[0]
-			m.logger.Info("auto-focus first element", "focused", m.focusedID)
-		}
+		m.reconcileFocusAfterSync()
 		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
@@ -123,6 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Error("script sync failed", "error", err)
 			cmd = m.syncState()
 		}
+		m.reconcileFocusAfterSync()
 		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
@@ -191,6 +186,49 @@ func (m *Model) syncState() tea.Cmd {
 	m.focus = BuildFocusRing(tree)
 	m.logger.Debug("focus ring built", "size", len(m.focus.IDs), "ids", m.focus.IDs)
 	return batchCmds(m.widgets.Commands(tree)...)
+}
+
+func (m *Model) reconcileFocusAfterSync() {
+	if m.focusedID != "" && !m.focus.Contains(m.focusedID) {
+		m.focusedID = ""
+	}
+
+	if m.focusedID != "" {
+		return
+	}
+
+	if preferred := m.preferredInitialFocus(); preferred != "" {
+		m.focusedID = preferred
+		m.logger.Info("auto-focus initial_focus", "focused", m.focusedID)
+		return
+	}
+
+	if len(m.focus.IDs) > 0 {
+		m.focusedID = m.focus.IDs[0]
+		m.logger.Info("auto-focus first element", "focused", m.focusedID)
+	}
+}
+
+func (m *Model) preferredInitialFocus() string {
+	tree := m.server.Tree()
+	if tree == nil || tree.Root == nil {
+		return ""
+	}
+
+	raw, ok := tree.Root.GetProp("initial_focus")
+	if !ok {
+		return ""
+	}
+
+	id, ok := raw.(string)
+	if !ok || id == "" {
+		return ""
+	}
+
+	if !m.focus.Contains(id) {
+		return ""
+	}
+	return id
 }
 
 // handleKey processes keyboard input. Must be called under the server's Lock

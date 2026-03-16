@@ -36,12 +36,11 @@ func (b *Bridge) Server() *imcp.Server {
 }
 
 // NotifyDOMChanged notifies the BubbleTea program that the DOM has changed.
-// Called by MCP tool handlers after patch/replace/restore operations.
-func (b *Bridge) NotifyDOMChanged() {
+func (b *Bridge) NotifyDOMChanged(kind imcp.MutationKind) {
 	if b.OnMutation != nil {
 		b.OnMutation()
 	}
-	b.program.Send(DOMChangedMsg{})
+	b.program.Send(DOMChangedMsg{MutationKind: kind})
 }
 
 // NotifyConnected notifies the BubbleTea program that a new MCP client connected.

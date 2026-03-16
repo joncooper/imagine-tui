@@ -1,8 +1,10 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joncooper/imagine-tui/internal/dom"
@@ -203,6 +205,216 @@ func TestModelKeyRouteToFocusedScrollContainer(t *testing.T) {
 	after := model.View()
 	if !strings.Contains(after, "line4") || strings.Contains(after, "line1") {
 		t.Fatalf("expected scrolled viewport, got:\n%s", after)
+	}
+}
+
+func TestModelDOMChangedHonorsInitialFocusAndRoutesTableKeys(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := srv.Tree().Root
+	root.SetProp("initial_focus", "results_table")
+
+	search, _ := dom.NewNode("search", dom.TypeInput)
+	search.SetProp("placeholder", "Search")
+	if err := srv.Tree().Insert("root", search, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _ := dom.NewNode("results_table", dom.TypeTable)
+	table.SetProp("columns", []any{
+		map[string]any{"key": "level", "label": "Level"},
+		map[string]any{"key": "msg", "label": "Message"},
+	})
+	table.SetProp("rows", []any{
+		map[string]any{"level": "INFO", "msg": "first"},
+		map[string]any{"level": "ERROR", "msg": "second"},
+	})
+	if err := srv.Tree().Insert("root", table, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+
+	newM, _ := m.Update(DOMChangedMsg{MutationKind: imcp.MutationKindResetFocus})
+	model := newM.(Model)
+	if model.focusedID != "results_table" {
+		t.Fatalf("focusedID = %q, want results_table", model.focusedID)
+	}
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(Model)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(Model)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	evt, err := srv.Events().Dequeue(ctx, nil)
+	if err != nil {
+		t.Fatalf("dequeue event: %v", err)
+	}
+	if evt.Source != "results_table" {
+		t.Fatalf("event source = %q, want results_table", evt.Source)
+	}
+	if evt.Type != "select" {
+		t.Fatalf("event type = %q, want select", evt.Type)
+	}
+	if evt.Data["index"] != 1 {
+		t.Fatalf("selected index = %v, want 1", evt.Data["index"])
+	}
+}
+
+func TestModelInitialFocusFallsBackToFirstFocusable(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := srv.Tree().Root
+	root.SetProp("initial_focus", "missing")
+
+	search, _ := dom.NewNode("search", dom.TypeInput)
+	search.SetProp("placeholder", "Search")
+	if err := srv.Tree().Insert("root", search, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _ := dom.NewNode("results_table", dom.TypeTable)
+	table.SetProp("columns", []any{map[string]any{"key": "level", "label": "Level"}})
+	table.SetProp("rows", []any{map[string]any{"level": "INFO"}})
+	if err := srv.Tree().Insert("root", table, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+
+	newM, _ := m.Update(DOMChangedMsg{MutationKind: imcp.MutationKindResetFocus})
+	model := newM.(Model)
+	if model.focusedID != "search" {
+		t.Fatalf("focusedID = %q, want search", model.focusedID)
+	}
+}
+
+func TestModelRelayoutResetsFocusBeforeApplyingInitialFocus(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+
+	result, err := srv.CallTool(context.Background(), "replace", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"children": []any{
+				map[string]any{"id": "search", "type": "input", "props": map[string]any{"placeholder": "Search"}},
+				map[string]any{
+					"id":   "results_table",
+					"type": "table",
+					"props": map[string]any{
+						"columns": []any{map[string]any{"key": "level", "label": "Level"}},
+						"rows":    []any{map[string]any{"level": "INFO"}},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("replace returned error: %v", result.Content)
+	}
+
+	newM, _ := m.Update(DOMChangedMsg{MutationKind: imcp.MutationKindResetFocus})
+	model := newM.(Model)
+	if model.focusedID != "search" {
+		t.Fatalf("focusedID = %q, want search", model.focusedID)
+	}
+
+	result, err = srv.CallTool(context.Background(), "replace", map[string]any{
+		"tree": map[string]any{
+			"id":   "root",
+			"type": "container",
+			"props": map[string]any{
+				"initial_focus": "results_table",
+			},
+			"children": []any{
+				map[string]any{"id": "search", "type": "input", "props": map[string]any{"placeholder": "Search"}},
+				map[string]any{
+					"id":   "results_table",
+					"type": "table",
+					"props": map[string]any{
+						"columns": []any{map[string]any{"key": "level", "label": "Level"}},
+						"rows": []any{
+							map[string]any{"level": "INFO"},
+							map[string]any{"level": "ERROR"},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("replace returned error: %v", result.Content)
+	}
+
+	newM, _ = model.Update(DOMChangedMsg{MutationKind: imcp.MutationKindResetFocus})
+	model = newM.(Model)
+	if model.focusedID != "results_table" {
+		t.Fatalf("focusedID = %q, want results_table", model.focusedID)
+	}
+}
+
+func TestModelIncrementalDOMChangePreservesExistingFocus(t *testing.T) {
+	srv, err := imcp.NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := srv.Tree().Root
+	root.SetProp("initial_focus", "results_table")
+
+	search, _ := dom.NewNode("search", dom.TypeInput)
+	search.SetProp("placeholder", "Search")
+	if err := srv.Tree().Insert("root", search, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _ := dom.NewNode("results_table", dom.TypeTable)
+	table.SetProp("columns", []any{map[string]any{"key": "level", "label": "Level"}})
+	table.SetProp("rows", []any{map[string]any{"level": "INFO"}})
+	if err := srv.Tree().Insert("root", table, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(srv, widget.DefaultRegistry())
+	m.width = 80
+	m.height = 24
+	m.syncState()
+	m.focusedID = "search"
+
+	table.SetProp("rows", []any{
+		map[string]any{"level": "INFO"},
+		map[string]any{"level": "ERROR"},
+	})
+
+	newM, _ := m.Update(DOMChangedMsg{MutationKind: imcp.MutationKindUpdate})
+	model := newM.(Model)
+	if model.focusedID != "search" {
+		t.Fatalf("focusedID = %q, want search", model.focusedID)
 	}
 }
 

@@ -8,6 +8,10 @@ type Info struct {
 	Events      []EventInfo `json:"events,omitempty"`
 	Focusable   bool        `json:"focusable"`
 	Scrollable  bool        `json:"scrollable"`
+	KeyBindings []string    `json:"key_bindings,omitempty"`
+	FocusModel  string      `json:"focus_model,omitempty"`
+	UsageNotes  []string    `json:"usage_notes,omitempty"`
+	Example     string      `json:"example,omitempty"`
 }
 
 // PropInfo describes a widget prop.
@@ -42,10 +46,19 @@ func Catalog() []Info {
 				{Name: "overflow", Type: "string", Description: "Overflow behavior. Set to \"scroll\" to enable a viewport when height is constrained"},
 				{Name: "style", Type: "string", Description: "Theme token for styling"},
 				{Name: "focus_trap", Type: "bool", Description: "If true, Tab/Shift-Tab cycles only among focusable descendants"},
+				{Name: "initial_focus", Type: "string", Description: "Root-only hint: focus this node ID after layout/replace before falling back to DOM order"},
 				{Name: "item_template", Type: "map", Description: "Template for set_items: a node spec with {{key}} placeholders in string props"},
 			},
-			Focusable:  false,
-			Scrollable: true,
+			Focusable:   false,
+			Scrollable:  true,
+			KeyBindings: []string{"Tab/Shift-Tab: cycle focus among focusable descendants", "Up/Down: scroll only when overflow is \"scroll\" and the container is focused"},
+			FocusModel:  "Containers are not in the Tab order by default. A scroll container becomes focusable when overflow is \"scroll\" and height/max_height is constrained. On the root container, set initial_focus to a focusable node ID to override DOM-order focus after layout.",
+			UsageNotes: []string{
+				"layout replaces the whole tree. Run layout before set_items when possible.",
+				"If you need to experiment with structure and come back, take a snapshot first and restore it later.",
+				"Without a height or max_height constraint, tall content can push siblings off-screen. Use height + overflow: \"scroll\" for local scrolling panes.",
+			},
+			Example: "Five-widget example:\n{\n  \"id\": \"root\",\n  \"type\": \"container\",\n  \"props\": {\"direction\": \"vertical\", \"gap\": 1, \"initial_focus\": \"results_table\"},\n  \"children\": [\n    {\"id\": \"header\", \"type\": \"text\", \"props\": {\"content\": \"Log Viewer\"}},\n    {\"id\": \"search\", \"type\": \"input\", \"props\": {\"placeholder\": \"Search logs\"}},\n    {\"id\": \"toolbar\", \"type\": \"container\", \"props\": {\"direction\": \"horizontal\", \"gap\": 1}, \"children\": [\n      {\"id\": \"refresh\", \"type\": \"button\", \"props\": {\"label\": \"Refresh\"}},\n      {\"id\": \"status\", \"type\": \"text\", \"props\": {\"content\": \"Ready\"}}\n    ]},\n    {\"id\": \"results_table\", \"type\": \"table\", \"props\": {\"columns\": [{\"key\": \"level\", \"label\": \"Level\"}, {\"key\": \"msg\", \"label\": \"Message\"}], \"rows\": []}},\n    {\"id\": \"footer\", \"type\": \"text\", \"props\": {\"content\": \"Tab cycles focus\"}}\n  ]\n}",
 		},
 		{
 			Type:        "text",
@@ -71,8 +84,10 @@ func Catalog() []Info {
 			Events: []EventInfo{
 				{Type: "select", Description: "User pressed Enter on an item", DataFields: map[string]string{"id": "Item ID", "label": "Item label"}},
 			},
-			Focusable:  true,
-			Scrollable: true,
+			Focusable:   true,
+			Scrollable:  true,
+			KeyBindings: []string{"Up/Down: move selection", "Enter: emit select event"},
+			FocusModel:  "Arrow keys work only when the list has focus. Focus starts on the first focusable node in DOM order unless the root container sets initial_focus. Tab/Shift-Tab cycle focus.",
 		},
 		{
 			Type:        "table",
@@ -87,8 +102,11 @@ func Catalog() []Info {
 				{Type: "select", Description: "User pressed Enter on a row (when not expandable)", DataFields: map[string]string{"index": "Row index", "row": "Full row data"}},
 				{Type: "expand", Description: "User toggled row expansion", DataFields: map[string]string{"index": "Row index", "expanded": "New expanded state"}},
 			},
-			Focusable:  true,
-			Scrollable: true,
+			Focusable:   true,
+			Scrollable:  true,
+			KeyBindings: []string{"Up/Down: move selected row", "Enter: select row or toggle expansion"},
+			FocusModel:  "Arrow keys work only when the table has focus. Focus starts on the first focusable node in DOM order unless the root container sets initial_focus. Tab/Shift-Tab cycle focus.",
+			UsageNotes:  []string{"If the table should own arrow keys immediately after layout, set root props.initial_focus to the table ID.", "A tall table without a constrained parent can push siblings off-screen; wrap it in a container with height + overflow: \"scroll\" when needed."},
 		},
 		{
 			Type:        "input",
@@ -103,8 +121,10 @@ func Catalog() []Info {
 				{Type: "submit", Description: "User pressed Enter", DataFields: map[string]string{"value": "Current input value"}},
 				{Type: "change", Description: "Input value changed", DataFields: map[string]string{"value": "New value"}},
 			},
-			Focusable:  true,
-			Scrollable: false,
+			Focusable:   true,
+			Scrollable:  false,
+			KeyBindings: []string{"Text keys: edit value", "Enter: emit submit event", "Tab/Shift-Tab: leave the input and move focus"},
+			FocusModel:  "Inputs are focusable by default and consume text-entry keys while focused.",
 		},
 		{
 			Type:        "textarea",

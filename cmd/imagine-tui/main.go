@@ -22,7 +22,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: imagine-tui <serve|connect> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: imagine-tui <serve|connect|push-items> [flags]")
 		os.Exit(1)
 	}
 
@@ -32,8 +32,10 @@ func main() {
 		err = serve(os.Args[2:])
 	case "connect":
 		err = connectCmd(os.Args[2:])
+	case "push-items":
+		err = pushItemsCmd(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: imagine-tui <serve|connect> [flags]\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\nUsage: imagine-tui <serve|connect|push-items> [flags]\n", os.Args[1])
 		os.Exit(1)
 	}
 
@@ -285,14 +287,9 @@ func connectCmd(args []string) error {
 	}
 	socketPath := args[0]
 
-	// Check if the socket file exists before attempting to dial.
-	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
-		return fmt.Errorf("socket %s does not exist — start the server first: imagine-tui serve -socket %s", socketPath, socketPath)
-	}
-
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := dialSocket(socketPath)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w (is the server running?)", socketPath, err)
+		return err
 	}
 	defer func() { _ = conn.Close() }()
 

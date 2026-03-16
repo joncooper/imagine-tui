@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -190,6 +192,52 @@ func TestServerListsAllTools(t *testing.T) {
 
 	if len(result.Tools) != len(expected) {
 		t.Errorf("expected %d tools, got %d", len(expected), len(result.Tools))
+	}
+}
+
+func TestSetItemsToolMetadataPrefersPushItems(t *testing.T) {
+	e := setup(t)
+
+	result, err := e.session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.Name != "set_items" {
+			continue
+		}
+
+		if !strings.Contains(tool.Description, "push-items") {
+			t.Fatalf("set_items description = %q, want push-items guidance", tool.Description)
+		}
+
+		schema, ok := tool.InputSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("set_items input schema type = %T, want map[string]any", tool.InputSchema)
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("set_items properties type = %T, want map[string]any", schema["properties"])
+		}
+		if _, ok := props["file"]; ok {
+			t.Fatal("set_items input schema should not advertise file")
+		}
+		if _, ok := props["format"]; ok {
+			t.Fatal("set_items input schema should not advertise format")
+		}
+		return
+	}
+
+	t.Fatal("set_items tool not found")
+}
+
+func TestServerInstructionsMentionPushItems(t *testing.T) {
+	if !strings.Contains(serverInstructions, "push-items") {
+		t.Fatalf("server instructions missing push-items guidance:\n%s", serverInstructions)
+	}
+	if strings.Contains(serverInstructions, "set_items accepts either inline items or file-based loading") {
+		t.Fatalf("server instructions still advertise server-side file loading:\n%s", serverInstructions)
 	}
 }
 
@@ -1231,8 +1279,10 @@ func TestOnMutationCallback(t *testing.T) {
 		e := setupWithTree(t)
 		var mu sync.Mutex
 		calls := 0
-		e.server.SetOnMutation(func() {
+		var kind MutationKind
+		e.server.SetOnMutation(func(k MutationKind) {
 			mu.Lock()
+			kind = k
 			calls++
 			mu.Unlock()
 		})
@@ -1248,12 +1298,15 @@ func TestOnMutationCallback(t *testing.T) {
 		if calls != 1 {
 			t.Fatalf("expected 1 mutation callback, got %d", calls)
 		}
+		if kind != MutationKindUpdate {
+			t.Fatalf("mutation kind = %q, want %q", kind, MutationKindUpdate)
+		}
 	})
 
 	t.Run("patch does not fire callback on error", func(t *testing.T) {
 		e := setup(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(MutationKind) { calls++ })
 
 		r := e.call(t, "patch", map[string]any{
 			"ops": []any{
@@ -1273,7 +1326,11 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("replace whole tree fires callback", func(t *testing.T) {
 		e := setup(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		var kind MutationKind
+		e.server.SetOnMutation(func(k MutationKind) {
+			kind = k
+			calls++
+		})
 
 		e.call(t, "replace", map[string]any{
 			"tree": map[string]any{
@@ -1288,12 +1345,19 @@ func TestOnMutationCallback(t *testing.T) {
 		if calls != 1 {
 			t.Fatalf("expected 1 mutation callback, got %d", calls)
 		}
+		if kind != MutationKindResetFocus {
+			t.Fatalf("mutation kind = %q, want %q", kind, MutationKindResetFocus)
+		}
 	})
 
 	t.Run("replace subtree fires callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		var kind MutationKind
+		e.server.SetOnMutation(func(k MutationKind) {
+			kind = k
+			calls++
+		})
 
 		e.call(t, "replace", map[string]any{
 			"target_id": "main",
@@ -1304,6 +1368,9 @@ func TestOnMutationCallback(t *testing.T) {
 
 		if calls != 1 {
 			t.Fatalf("expected 1 mutation callback, got %d", calls)
+		}
+		if kind != MutationKindUpdate {
+			t.Fatalf("mutation kind = %q, want %q", kind, MutationKindUpdate)
 		}
 	})
 
@@ -1322,19 +1389,26 @@ func TestOnMutationCallback(t *testing.T) {
 
 		// Now register callback and restore.
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		var kind MutationKind
+		e.server.SetOnMutation(func(k MutationKind) {
+			kind = k
+			calls++
+		})
 
 		e.call(t, "restore", map[string]any{"name": "before"})
 
 		if calls != 1 {
 			t.Fatalf("expected 1 mutation callback, got %d", calls)
 		}
+		if kind != MutationKindResetFocus {
+			t.Fatalf("mutation kind = %q, want %q", kind, MutationKindResetFocus)
+		}
 	})
 
 	t.Run("snapshot does not fire callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(MutationKind) { calls++ })
 
 		e.call(t, "snapshot", map[string]any{"name": "test"})
 
@@ -1346,7 +1420,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("query does not fire callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(MutationKind) { calls++ })
 
 		e.call(t, "query", map[string]any{"ids": []any{"header"}})
 
@@ -1514,6 +1588,54 @@ func TestSetItemsTool_ReplacesExisting(t *testing.T) {
 	}
 }
 
+func TestSetItemsTool_FileParameterRejected(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "items.json")
+	data := `[
+		{"level":"INFO","msg":"server started"},
+		{"level":"ERROR","msg":"disk full"}
+	]`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"file":   path,
+	})
+	if !result.IsError {
+		t.Fatal("expected file-based set_items to be rejected")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "push-items") {
+		t.Fatalf("unexpected error: %s", text)
+	}
+}
+
+func TestSetItemsTool_FileRejectedEvenWithItems(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "items.json")
+	if err := os.WriteFile(path, []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+		"file":   path,
+	})
+	if !result.IsError {
+		t.Fatal("expected file-based set_items to be rejected")
+	}
+	if got := resultText(t, result); !strings.Contains(got, "push-items") {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
 func TestSetItemsTool_MissingTarget(t *testing.T) {
 	e := setupWithTemplate(t)
 	result := e.call(t, "set_items", map[string]any{
@@ -1533,6 +1655,20 @@ func TestSetItemsTool_NoTemplate(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Error("expected error for node without item_template")
+	}
+}
+
+func TestSetItemsTool_MissingItems(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+	})
+	if !result.IsError {
+		t.Fatal("expected missing items to be rejected")
+	}
+	if got := resultText(t, result); !strings.Contains(got, "missing required parameter: items") {
+		t.Fatalf("unexpected error: %s", got)
 	}
 }
 
@@ -1602,7 +1738,11 @@ func TestRemoveItemsTool_Basic(t *testing.T) {
 func TestSetItems_FiresMutationCallback(t *testing.T) {
 	e := setupWithTemplate(t)
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	var kind MutationKind
+	e.server.SetOnMutation(func(k MutationKind) {
+		kind = k
+		calls++
+	})
 
 	e.call(t, "set_items", map[string]any{
 		"target": "log-list",
@@ -1611,6 +1751,9 @@ func TestSetItems_FiresMutationCallback(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+	if kind != MutationKindUpdate {
+		t.Fatalf("mutation kind = %q, want %q", kind, MutationKindUpdate)
 	}
 }
 
@@ -1622,7 +1765,11 @@ func TestAppendItems_FiresMutationCallback(t *testing.T) {
 	})
 
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	var kind MutationKind
+	e.server.SetOnMutation(func(k MutationKind) {
+		kind = k
+		calls++
+	})
 
 	e.call(t, "append_items", map[string]any{
 		"target": "log-list",
@@ -1631,6 +1778,9 @@ func TestAppendItems_FiresMutationCallback(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+	if kind != MutationKindUpdate {
+		t.Fatalf("mutation kind = %q, want %q", kind, MutationKindUpdate)
 	}
 }
 
@@ -1642,7 +1792,11 @@ func TestRemoveItems_FiresMutationCallback(t *testing.T) {
 	})
 
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	var kind MutationKind
+	e.server.SetOnMutation(func(k MutationKind) {
+		kind = k
+		calls++
+	})
 
 	e.call(t, "remove_items", map[string]any{
 		"target": "log-list",
@@ -1651,6 +1805,9 @@ func TestRemoveItems_FiresMutationCallback(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("expected 1 mutation callback, got %d", calls)
+	}
+	if kind != MutationKindUpdate {
+		t.Fatalf("mutation kind = %q, want %q", kind, MutationKindUpdate)
 	}
 }
 
@@ -1716,6 +1873,38 @@ func TestDescribeWidgets_SingleType(t *testing.T) {
 	}
 	if !strings.Contains(text, "select") {
 		t.Errorf("expected select event in list info, got: %s", text)
+	}
+}
+
+func TestDescribeWidgets_DocumentsFocusAndLayoutGuidance(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "table"})
+	text := resultText(t, result)
+
+	for _, want := range []string{
+		"Tab/Shift-Tab",
+		"initial_focus",
+		"Arrow keys work only when the table has focus",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing focus guidance %q in table info", want)
+		}
+	}
+
+	container := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "container"})
+	containerText := resultText(t, container)
+	for _, want := range []string{
+		"layout replaces the whole tree",
+		"snapshot",
+		"height + overflow",
+		"Five-widget example",
+	} {
+		if !strings.Contains(containerText, want) {
+			t.Errorf("missing container guidance %q", want)
+		}
 	}
 }
 

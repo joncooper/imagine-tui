@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -45,7 +46,7 @@ func TestRenderRunsMountAndComputedScriptsOnDOMChange(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 	view := model.View()
 	if !strings.Contains(view, "ALPHA") {
@@ -88,7 +89,7 @@ func TestRenderRunsOnChangeScriptsAndQueuesAgentEvents(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 	model.focusedID = "search"
 
@@ -142,7 +143,7 @@ func TestRenderRunsOnKeyScriptsWithoutButtonClickFallback(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 	model.focusedID = "action"
 
@@ -186,7 +187,7 @@ func TestRenderRunsTimerCallbacksViaTick(t *testing.T) {
 		},
 	})
 
-	newM, cmd := m.Update(DOMChangedMsg{})
+	newM, cmd := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	if cmd == nil {
 		t.Fatal("expected DOMChangedMsg to schedule a timer tick")
 	}
@@ -234,7 +235,7 @@ func TestRenderCancelsTimersWhenOwnerNodeRemoved(t *testing.T) {
 		},
 	})
 
-	newM, cmd := m.Update(DOMChangedMsg{})
+	newM, cmd := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	if cmd == nil {
 		t.Fatal("expected DOMChangedMsg to schedule a timer tick")
 	}
@@ -249,7 +250,7 @@ func TestRenderCancelsTimersWhenOwnerNodeRemoved(t *testing.T) {
 		},
 	})
 
-	newM2, _ := model.Update(DOMChangedMsg{})
+	newM2, _ := model.Update(DOMChangedMsg{Ctx: context.Background()})
 	model2 := newM2.(Model)
 
 	timerMsg := cmd()

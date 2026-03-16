@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
@@ -12,6 +13,8 @@ import (
 type mockProgram struct {
 	msgs []tea.Msg
 }
+
+type bridgeTestKey string
 
 func (m *mockProgram) Send(msg tea.Msg) {
 	m.msgs = append(m.msgs, msg)
@@ -26,13 +29,17 @@ func TestBridgeNotifiesOnDOMChange(t *testing.T) {
 	mp := &mockProgram{}
 	bridge := NewBridge(srv, mp)
 
-	bridge.NotifyDOMChanged()
+	ctx := context.WithValue(context.Background(), bridgeTestKey("test"), "dom")
+	bridge.NotifyDOMChanged(ctx)
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mp.msgs))
 	}
 	if _, ok := mp.msgs[0].(DOMChangedMsg); !ok {
 		t.Errorf("expected DOMChangedMsg, got %T", mp.msgs[0])
+	}
+	if msg := mp.msgs[0].(DOMChangedMsg); msg.Ctx != ctx {
+		t.Error("DOMChangedMsg should preserve context")
 	}
 }
 
@@ -45,7 +52,8 @@ func TestBridgeNotifiesDisconnect(t *testing.T) {
 	mp := &mockProgram{}
 	bridge := NewBridge(srv, mp)
 
-	bridge.NotifyDisconnected(7, nil)
+	ctx := context.WithValue(context.Background(), bridgeTestKey("test"), "disconnect")
+	bridge.NotifyDisconnected(ctx, 7, nil)
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mp.msgs))
@@ -56,6 +64,9 @@ func TestBridgeNotifiesDisconnect(t *testing.T) {
 	}
 	if msg.SessionID != 7 {
 		t.Errorf("SessionID = %d, want 7", msg.SessionID)
+	}
+	if msg.Ctx != ctx {
+		t.Error("MCPDisconnectedMsg should preserve context")
 	}
 }
 
@@ -68,7 +79,8 @@ func TestBridgeNotifiesConnect(t *testing.T) {
 	mp := &mockProgram{}
 	bridge := NewBridge(srv, mp)
 
-	bridge.NotifyConnected(9)
+	ctx := context.WithValue(context.Background(), bridgeTestKey("test"), "connect")
+	bridge.NotifyConnected(ctx, 9)
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mp.msgs))
@@ -79,6 +91,9 @@ func TestBridgeNotifiesConnect(t *testing.T) {
 	}
 	if msg.SessionID != 9 {
 		t.Errorf("SessionID = %d, want 9", msg.SessionID)
+	}
+	if msg.Ctx != ctx {
+		t.Error("MCPConnectedMsg should preserve context")
 	}
 }
 
@@ -106,14 +121,22 @@ func TestBridgeOnMutationCallback(t *testing.T) {
 	bridge := NewBridge(srv, mp)
 
 	var called atomic.Int32
-	bridge.OnMutation = func() { called.Add(1) }
+	ctx := context.WithValue(context.Background(), bridgeTestKey("test"), "mutation")
+	var mutationCtx context.Context
+	bridge.OnMutation = func(got context.Context) {
+		mutationCtx = got
+		called.Add(1)
+	}
 
-	bridge.NotifyDOMChanged()
+	bridge.NotifyDOMChanged(ctx)
 
 	if called.Load() != 1 {
 		t.Errorf("OnMutation called %d times, want 1", called.Load())
 	}
 	if len(mp.msgs) != 1 {
 		t.Errorf("expected 1 msg, got %d", len(mp.msgs))
+	}
+	if mutationCtx != ctx {
+		t.Error("OnMutation should receive the message context")
 	}
 }

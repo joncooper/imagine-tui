@@ -71,7 +71,7 @@ func TestMCPPatchTriggersReRender(t *testing.T) {
 	})
 
 	// Simulate DOMChangedMsg (as bridge would send).
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	view := model.View()
@@ -106,7 +106,7 @@ func TestMCPPatchUpdatesExistingNode(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	// Patch the text.
@@ -120,7 +120,7 @@ func TestMCPPatchUpdatesExistingNode(t *testing.T) {
 		},
 	})
 
-	newM2, _ := model.Update(DOMChangedMsg{})
+	newM2, _ := model.Update(DOMChangedMsg{Ctx: context.Background()})
 	model2 := newM2.(Model)
 
 	view := model2.View()
@@ -158,7 +158,7 @@ func TestMCPAwaitEventBlocksAndReturns(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	// Start await_event in a goroutine with timeout.
@@ -177,7 +177,7 @@ func TestMCPAwaitEventBlocksAndReturns(t *testing.T) {
 
 	// Simulate button click by focusing and pressing Enter.
 	model.focusedID = "btn"
-	model.syncState()
+	model.syncState(context.Background())
 	newM2, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = newM2
 
@@ -241,7 +241,7 @@ func TestConcurrentPatchAndKeypress(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 	model.focusedID = "input1"
 
@@ -297,7 +297,7 @@ func TestMCPSnapshotRestoreTriggersDOMChanged(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	callTool(t, srv, "snapshot", map[string]any{"name": "checkpoint"})
@@ -308,7 +308,7 @@ func TestMCPSnapshotRestoreTriggersDOMChanged(t *testing.T) {
 		},
 	})
 
-	newM2, _ := model.Update(DOMChangedMsg{})
+	newM2, _ := model.Update(DOMChangedMsg{Ctx: context.Background()})
 	model2 := newM2.(Model)
 	view := model2.View()
 	if !strings.Contains(view, "State B") {
@@ -317,7 +317,7 @@ func TestMCPSnapshotRestoreTriggersDOMChanged(t *testing.T) {
 
 	callTool(t, srv, "restore", map[string]any{"name": "checkpoint"})
 
-	newM3, _ := model2.Update(DOMChangedMsg{})
+	newM3, _ := model2.Update(DOMChangedMsg{Ctx: context.Background()})
 	model3 := newM3.(Model)
 	view = model3.View()
 	if !strings.Contains(view, "State A") {
@@ -375,7 +375,7 @@ func TestBridgeIntegrationPatchSendsMsg(t *testing.T) {
 			},
 		},
 	})
-	bridge.NotifyDOMChanged()
+	bridge.NotifyDOMChanged(context.Background())
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 msg, got %d", len(mp.msgs))
@@ -413,7 +413,7 @@ func TestEventContextCollectsSiblingValues(t *testing.T) {
 	m := NewModel(srv, widget.DefaultRegistry())
 	m.width = 80
 	m.height = 24
-	m.syncState()
+	m.syncState(context.Background())
 
 	ctx := m.collectContext("submit_btn")
 	if ctx == nil {
@@ -455,7 +455,7 @@ func TestFocusAdjustsAfterNodeRemoval(t *testing.T) {
 	m := NewModel(srv, widget.DefaultRegistry())
 	m.width = 80
 	m.height = 24
-	m.syncState()
+	m.syncState(context.Background())
 	m.focusedID = "btn2"
 
 	callTool(t, srv, "patch", map[string]any{
@@ -464,7 +464,7 @@ func TestFocusAdjustsAfterNodeRemoval(t *testing.T) {
 		},
 	})
 
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	model := newM.(Model)
 
 	if model.focusedID == "btn2" {

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strings"
@@ -11,16 +12,23 @@ import (
 	"github.com/joncooper/imagine-tui/internal/dom"
 	imcp "github.com/joncooper/imagine-tui/internal/mcp"
 	"github.com/joncooper/imagine-tui/internal/script"
+	"github.com/joncooper/imagine-tui/internal/telemetry"
 	"github.com/joncooper/imagine-tui/internal/widget"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
 )
 
 // Model is the top-level BubbleTea model that wires together the DOM tree,
 // widget renderers, event queue, and MCP server.
 type Model struct {
-	server  *imcp.Server
-	widgets *widget.Tree
-	focus   *FocusRing
-	logger  *slog.Logger
+	server   *imcp.Server
+	widgets  *widget.Tree
+	focus    *FocusRing
+	logger   *slog.Logger
+	tracer   trace.Tracer
+	traceCtx context.Context
 
 	focusedID           string
 	width               int
@@ -40,6 +48,8 @@ func NewModel(srv *imcp.Server, registry *widget.Registry) Model {
 		widgets:    widget.NewTree(registry),
 		focus:      &FocusRing{index: make(map[string]int)},
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		tracer:     nooptrace.NewTracerProvider().Tracer("github.com/joncooper/imagine-tui/internal/render"),
+		traceCtx:   context.Background(),
 		knownNodes: make(map[string]bool),
 	}
 }
@@ -48,6 +58,11 @@ func NewModel(srv *imcp.Server, registry *widget.Registry) Model {
 func (m *Model) SetLogger(l *slog.Logger) {
 	m.logger = l
 	m.widgets.SetLogger(l)
+}
+
+// SetTracer sets the tracer used for render instrumentation.
+func (m *Model) SetTracer(t trace.Tracer) {
+	m.tracer = t
 }
 
 // Init implements tea.Model. No startup command is needed.
@@ -59,19 +74,31 @@ func (m Model) Init() tea.Cmd {
 // Acquires the server's write lock for the duration of the update to serialize
 // with concurrent MCP handler goroutines that also mutate the DOM under Lock.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	ctx := m.contextForMsg(msg)
+	ctx, span := m.tracer.Start(
+		ctx,
+		"render.update",
+		trace.WithAttributes(attribute.String("render.message_type", messageType(msg))),
+	)
+	defer span.End()
+
 	m.server.Lock()
 	defer m.server.Unlock()
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.logger.Info("window resize", "width", msg.Width, "height", msg.Height)
+		m.logger.InfoContext(ctx, "window resize", "width", msg.Width, "height", msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
-		cmd := m.withTimerCmd(m.syncState())
+		cmd := m.withTimerCmd(m.syncState(ctx))
 		return m, cmd
 
 	case tea.KeyMsg:
-		m.logger.Info("key", "type", msg.Type, "runes", string(msg.Runes),
+		span.SetAttributes(
+			attribute.String("render.key_type", msg.Type.String()),
+			attribute.String("render.key_runes", string(msg.Runes)),
+		)
+		m.logger.InfoContext(ctx, "key", "type", msg.Type, "runes", string(msg.Runes),
 			"focused", m.focusedID, "waiting_for_reconnect", m.waitingForReconnect)
 		// Allow 'q' or Esc to quit when disconnected or no DOM loaded.
 		if m.waitingForReconnect || m.server.Tree() == nil {
@@ -80,71 +107,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
-		next, cmd := m.handleKey(msg)
+		next, cmd := m.handleKey(ctx, msg)
 		return next, cmd
 
 	case DOMChangedMsg:
-		m.logger.Info("DOM changed, syncing state")
-		cmd, err := m.refreshScriptsAndWidgets()
+		m.traceCtx = ctx
+		m.logger.InfoContext(ctx, "DOM changed, syncing state")
+		cmd, err := m.refreshScriptsAndWidgets(ctx)
 		if err != nil {
-			m.logger.Error("script sync failed", "error", err)
-			cmd = m.syncState()
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script sync failed", "error", err)
+			cmd = m.syncState(ctx)
 		}
 		// If focused node was removed, adjust focus.
 		if m.focusedID != "" && !m.focus.Contains(m.focusedID) {
 			m.focusedID = m.focus.Next("")
-			m.logger.Info("focus adjusted (removed node)", "new_focus", m.focusedID)
+			m.logger.InfoContext(ctx, "focus adjusted (removed node)", "new_focus", m.focusedID)
 		}
 		// Auto-focus first element if nothing is focused.
 		if m.focusedID == "" && len(m.focus.IDs) > 0 {
 			m.focusedID = m.focus.IDs[0]
-			m.logger.Info("auto-focus first element", "focused", m.focusedID)
+			m.logger.InfoContext(ctx, "auto-focus first element", "focused", m.focusedID)
 		}
 		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
 	case MCPDisconnectedMsg:
+		m.traceCtx = context.Background()
 		if msg.SessionID != 0 && msg.SessionID != m.activeSessionID {
-			m.logger.Info("ignoring stale MCP disconnect", "session_id", msg.SessionID, "active_session_id", m.activeSessionID, "error", msg.Err)
+			m.logger.InfoContext(ctx, "ignoring stale MCP disconnect", "session_id", msg.SessionID, "active_session_id", m.activeSessionID, "error", msg.Err)
 			return m, nil
 		}
-		m.logger.Info("MCP disconnected", "session_id", msg.SessionID, "error", msg.Err)
+		m.logger.InfoContext(ctx, "MCP disconnected", "session_id", msg.SessionID, "error", msg.Err)
 		m.activeSessionID = 0
 		m.waitingForReconnect = true
 		cmd := m.withTimerCmd(nil)
 		return m, cmd
 
 	case MCPConnectedMsg:
-		m.logger.Info("MCP connected", "session_id", msg.SessionID)
+		m.traceCtx = ctx
+		m.logger.InfoContext(ctx, "MCP connected", "session_id", msg.SessionID)
 		m.activeSessionID = msg.SessionID
 		m.waitingForReconnect = false
-		cmd, err := m.refreshScriptsAndWidgets()
+		cmd, err := m.refreshScriptsAndWidgets(ctx)
 		if err != nil {
-			m.logger.Error("script sync failed", "error", err)
-			cmd = m.syncState()
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script sync failed", "error", err)
+			cmd = m.syncState(ctx)
 		}
 		cmd = m.withTimerCmd(cmd)
 		return m, cmd
 
 	case widget.CommandMsg:
-		return m.routeWidgetMessage(msg)
+		return m.routeWidgetMessage(ctx, msg)
 
 	case ShutdownMsg:
 		m.server.Shutdown()
 		return m, tea.Quit
 
 	case scriptTimerMsg:
+		m.traceCtx = ctx
 		if msg.Seq != m.timerSeq || m.scripts == nil {
 			return m, nil
 		}
 		ran, err := m.scripts.RunDueTimers(msg.FiredAt)
 		if err != nil {
-			m.logger.Error("script timer failed", "error", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script timer failed", "error", err)
 		}
 		if ran {
-			if _, err := m.refreshScriptsAndWidgets(); err != nil {
-				m.logger.Error("script refresh failed", "error", err)
-				m.syncState()
+			if _, err := m.refreshScriptsAndWidgets(ctx); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				m.logger.ErrorContext(ctx, "script refresh failed", "error", err)
+				m.syncState(ctx)
 			}
 		}
 		cmd := m.withTimerCmd(nil)
@@ -181,21 +220,32 @@ func (m Model) View() string {
 
 // syncState synchronizes the widget tree and focus ring with the current DOM.
 // Callers must hold the server's Lock or RLock.
-func (m *Model) syncState() tea.Cmd {
+func (m *Model) syncState(ctx context.Context) tea.Cmd {
+	ctx, span := m.tracer.Start(ctx, "render.sync_state")
+	defer span.End()
+
 	tree := m.server.Tree()
-	m.logger.Debug("syncState", "root_children", len(tree.Root.Children),
+	m.logger.DebugContext(ctx, "syncState", "root_children", len(tree.Root.Children),
 		"tree_summary", tree.Summary())
 	if err := m.widgets.Sync(tree); err != nil {
-		m.logger.Error("syncState: widget sync failed", "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		m.logger.ErrorContext(ctx, "syncState: widget sync failed", "error", err)
 	}
 	m.focus = BuildFocusRing(tree)
-	m.logger.Debug("focus ring built", "size", len(m.focus.IDs), "ids", m.focus.IDs)
-	return batchCmds(m.widgets.Commands(tree)...)
+	span.SetAttributes(
+		attribute.Int("render.root_children", len(tree.Root.Children)),
+		attribute.Int("render.focusable_count", len(m.focus.IDs)),
+	)
+	m.logger.DebugContext(ctx, "focus ring built", "size", len(m.focus.IDs), "ids", m.focus.IDs)
+	cmds := m.widgets.Commands(tree)
+	span.SetAttributes(attribute.Int("render.widget_command_count", len(cmds)))
+	return batchCmds(cmds...)
 }
 
 // handleKey processes keyboard input. Must be called under the server's Lock
 // (held by Update).
-func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) handleKey(ctx context.Context, msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.server.Shutdown()
@@ -204,21 +254,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case tea.KeyTab:
 		oldFocus := m.focusedID
 		m.focusedID = m.focusTab(true)
-		m.logger.Info("tab focus", "new_focus", m.focusedID)
-		cmd := m.withTimerCmd(m.runFocusHooks(oldFocus, m.focusedID))
+		m.logger.InfoContext(ctx, "tab focus", "new_focus", m.focusedID)
+		cmd := m.withTimerCmd(m.runFocusHooks(ctx, oldFocus, m.focusedID))
 		return m, cmd
 
 	case tea.KeyShiftTab:
 		oldFocus := m.focusedID
 		m.focusedID = m.focusTab(false)
-		m.logger.Info("shift-tab focus", "new_focus", m.focusedID)
-		cmd := m.withTimerCmd(m.runFocusHooks(oldFocus, m.focusedID))
+		m.logger.InfoContext(ctx, "shift-tab focus", "new_focus", m.focusedID)
+		cmd := m.withTimerCmd(m.runFocusHooks(ctx, oldFocus, m.focusedID))
 		return m, cmd
 
 	default:
 		// Route to focused widget.
 		if m.focusedID != "" {
-			next, cmd := m.routeKeyToWidget(msg)
+			next, cmd := m.routeKeyToWidget(ctx, msg)
 			timerCmd := next.withTimerCmd(cmd)
 			return next, timerCmd
 		}
@@ -238,7 +288,17 @@ func (m *Model) focusTab(forward bool) string {
 
 // routeKeyToWidget sends a key message to the currently focused widget and
 // processes any events it produces.
-func (m Model) routeKeyToWidget(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) routeKeyToWidget(ctx context.Context, msg tea.KeyMsg) (Model, tea.Cmd) {
+	ctx, span := m.tracer.Start(
+		ctx,
+		"render.route_key_to_widget",
+		trace.WithAttributes(
+			attribute.String("render.focused_id", m.focusedID),
+			attribute.String("render.key_type", msg.Type.String()),
+		),
+	)
+	defer span.End()
+
 	w := m.widgets.Get(m.focusedID)
 	if w == nil {
 		return m, nil
@@ -249,7 +309,7 @@ func (m Model) routeKeyToWidget(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	keyHookRan, hookCmd := m.runKeyHook(node.ID, msg)
+	keyHookRan, hookCmd := m.runKeyHook(ctx, node.ID, msg)
 	if keyHookRan {
 		node = m.server.Tree().Find(m.focusedID)
 		if node == nil {
@@ -266,11 +326,18 @@ func (m Model) routeKeyToWidget(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	result := w.Update(msg, node)
 
-	eventCmd := m.routeWidgetEvents(result.Events)
+	eventCmd := m.routeWidgetEvents(ctx, result.Events)
 	return m, batchCmds(hookCmd, widget.WrapCmd(node.ID, result.Cmd), eventCmd)
 }
 
-func (m Model) routeWidgetMessage(msg widget.CommandMsg) (tea.Model, tea.Cmd) {
+func (m Model) routeWidgetMessage(ctx context.Context, msg widget.CommandMsg) (tea.Model, tea.Cmd) {
+	ctx, span := m.tracer.Start(
+		ctx,
+		"render.route_widget_message",
+		trace.WithAttributes(attribute.String(telemetry.AttrWidgetNodeID, msg.NodeID)),
+	)
+	defer span.End()
+
 	w := m.widgets.Get(msg.NodeID)
 	if w == nil {
 		return m, nil
@@ -282,7 +349,7 @@ func (m Model) routeWidgetMessage(msg widget.CommandMsg) (tea.Model, tea.Cmd) {
 	}
 
 	result := w.Update(msg.Msg, node)
-	eventCmd := m.routeWidgetEvents(result.Events)
+	eventCmd := m.routeWidgetEvents(ctx, result.Events)
 	return m, batchCmds(widget.WrapCmd(node.ID, result.Cmd), eventCmd)
 }
 
@@ -316,27 +383,39 @@ func (m *Model) scheduleTimerCmd() tea.Cmd {
 		delay = 0
 	}
 
+	timerCtx := m.traceCtx
 	return tea.Tick(delay, func(firedAt time.Time) tea.Msg {
 		return scriptTimerMsg{
 			Seq:     seq,
 			FiredAt: firedAt,
+			Ctx:     timerCtx,
 		}
 	})
 }
 
 // routeWidgetEvent routes a widget event to the appropriate destination:
 // scripts first, then if the event should be agent-routed, enqueue it.
-func (m *Model) routeWidgetEvents(events []widget.Event) tea.Cmd {
+func (m *Model) routeWidgetEvents(ctx context.Context, events []widget.Event) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, evt := range events {
-		cmds = append(cmds, m.routeWidgetEvent(evt))
+		cmds = append(cmds, m.routeWidgetEvent(ctx, evt))
 	}
 	return batchCmds(cmds...)
 }
 
 // routeWidgetEvent routes a widget event to the appropriate destination:
 // scripts first, then if the event should be agent-routed, enqueue it.
-func (m *Model) routeWidgetEvent(evt widget.Event) tea.Cmd {
+func (m *Model) routeWidgetEvent(ctx context.Context, evt widget.Event) tea.Cmd {
+	ctx, span := m.tracer.Start(
+		ctx,
+		"render.route_widget_event",
+		trace.WithAttributes(
+			attribute.String(telemetry.AttrWidgetEvent, evt.Type),
+			attribute.String(telemetry.AttrWidgetNodeID, evt.NodeID),
+		),
+	)
+	defer span.End()
+
 	node := m.server.Tree().Find(evt.NodeID)
 	if node == nil {
 		return nil
@@ -360,7 +439,9 @@ func (m *Model) routeWidgetEvent(evt widget.Event) tea.Cmd {
 				value = evt.Data["selected"]
 			}
 			if err := m.scripts.NotifyChange(evt.NodeID, value); err != nil {
-				m.logger.Error("script on_change failed", "node_id", evt.NodeID, "error", err)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				m.logger.ErrorContext(ctx, "script on_change failed", "node_id", evt.NodeID, "error", err)
 			}
 		}
 	case "submit":
@@ -368,18 +449,22 @@ func (m *Model) routeWidgetEvent(evt widget.Event) tea.Cmd {
 			refreshNeeded = true
 			payload := &script.HookPayload{Data: evt.Data}
 			if _, err := m.scripts.ExecHook(evt.NodeID, script.HookOnSubmit, payload); err != nil {
-				m.logger.Error("script on_submit failed", "node_id", evt.NodeID, "error", err)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				m.logger.ErrorContext(ctx, "script on_submit failed", "node_id", evt.NodeID, "error", err)
 			}
 		}
 	}
 
-	if m.runEventHooks(node, evt) {
+	if m.runEventHooks(ctx, node, evt) {
 		refreshNeeded = true
 	}
 	if refreshNeeded {
-		cmd, err := m.refreshScriptsAndWidgets()
+		cmd, err := m.refreshScriptsAndWidgets(ctx)
 		if err != nil {
-			m.logger.Error("script refresh failed", "source", evt.NodeID, "error", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script refresh failed", "source", evt.NodeID, "error", err)
 		} else {
 			refreshCmd = cmd
 		}
@@ -400,6 +485,7 @@ func (m *Model) routeWidgetEvent(evt widget.Event) tea.Cmd {
 	domEvt.DOMSummary = m.server.Tree().Summary()
 
 	m.server.Events().Enqueue(domEvt)
+	span.SetAttributes(attribute.Bool("render.agent_routed", true))
 	return refreshCmd
 }
 
@@ -449,17 +535,24 @@ func (m *Model) ensureScriptRuntime() {
 	m.knownNodes = make(map[string]bool)
 }
 
-func (m *Model) refreshScriptsAndWidgets() (tea.Cmd, error) {
+func (m *Model) refreshScriptsAndWidgets(ctx context.Context) (tea.Cmd, error) {
+	ctx, span := m.tracer.Start(ctx, "render.refresh_scripts_and_widgets")
+	defer span.End()
+
 	m.ensureScriptRuntime()
 	if m.scripts != nil {
 		if err := m.reconcileScriptTree(); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, err
 		}
 		if err := m.scripts.EvalAllComputed(); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, err
 		}
 	}
-	return m.syncState(), nil
+	return m.syncState(ctx), nil
 }
 
 func (m *Model) reconcileScriptTree() error {
@@ -519,38 +612,48 @@ func (m *Model) hasHook(nodeID string, hook script.HookType) bool {
 	return ok && body != ""
 }
 
-func (m *Model) runKeyHook(nodeID string, msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *Model) runKeyHook(ctx context.Context, nodeID string, msg tea.KeyMsg) (bool, tea.Cmd) {
 	if !m.hasHook(nodeID, script.HookOnKey) {
 		return false, nil
 	}
 	if _, err := m.scripts.ExecHook(nodeID, script.HookOnKey, &script.HookPayload{Key: msg.String()}); err != nil {
-		m.logger.Error("script on_key failed", "node_id", nodeID, "error", err)
+		trace.SpanFromContext(ctx).RecordError(err)
+		trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+		m.logger.ErrorContext(ctx, "script on_key failed", "node_id", nodeID, "error", err)
 	}
-	cmd, err := m.refreshScriptsAndWidgets()
+	cmd, err := m.refreshScriptsAndWidgets(ctx)
 	if err != nil {
-		m.logger.Error("script refresh failed", "node_id", nodeID, "error", err)
+		trace.SpanFromContext(ctx).RecordError(err)
+		trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+		m.logger.ErrorContext(ctx, "script refresh failed", "node_id", nodeID, "error", err)
 	}
 	return true, cmd
 }
 
-func (m *Model) runFocusHooks(oldFocus, newFocus string) tea.Cmd {
+func (m *Model) runFocusHooks(ctx context.Context, oldFocus, newFocus string) tea.Cmd {
 	ran := false
 	if oldFocus != "" && m.hasHook(oldFocus, script.HookOnBlur) {
 		if _, err := m.scripts.ExecHook(oldFocus, script.HookOnBlur, nil); err != nil {
-			m.logger.Error("script on_blur failed", "node_id", oldFocus, "error", err)
+			trace.SpanFromContext(ctx).RecordError(err)
+			trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script on_blur failed", "node_id", oldFocus, "error", err)
 		}
 		ran = true
 	}
 	if newFocus != "" && m.hasHook(newFocus, script.HookOnFocus) {
 		if _, err := m.scripts.ExecHook(newFocus, script.HookOnFocus, nil); err != nil {
-			m.logger.Error("script on_focus failed", "node_id", newFocus, "error", err)
+			trace.SpanFromContext(ctx).RecordError(err)
+			trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script on_focus failed", "node_id", newFocus, "error", err)
 		}
 		ran = true
 	}
 	if ran {
-		cmd, err := m.refreshScriptsAndWidgets()
+		cmd, err := m.refreshScriptsAndWidgets(ctx)
 		if err != nil {
-			m.logger.Error("script refresh failed", "old_focus", oldFocus, "new_focus", newFocus, "error", err)
+			trace.SpanFromContext(ctx).RecordError(err)
+			trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script refresh failed", "old_focus", oldFocus, "new_focus", newFocus, "error", err)
 			return nil
 		}
 		return cmd
@@ -558,7 +661,7 @@ func (m *Model) runFocusHooks(oldFocus, newFocus string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) runEventHooks(node *dom.Node, evt widget.Event) bool {
+func (m *Model) runEventHooks(ctx context.Context, node *dom.Node, evt widget.Event) bool {
 	if m.scripts == nil {
 		m.ensureScriptRuntime()
 	}
@@ -578,7 +681,9 @@ func (m *Model) runEventHooks(node *dom.Node, evt widget.Event) bool {
 			continue
 		}
 		if _, err := m.scripts.ExecHook(parent.ID, script.HookOnEvent, payload); err != nil {
-			m.logger.Error("script on_event failed", "node_id", parent.ID, "source", evt.NodeID, "error", err)
+			trace.SpanFromContext(ctx).RecordError(err)
+			trace.SpanFromContext(ctx).SetStatus(codes.Error, err.Error())
+			m.logger.ErrorContext(ctx, "script on_event failed", "node_id", parent.ID, "source", evt.NodeID, "error", err)
 		}
 		ran = true
 	}
@@ -705,4 +810,52 @@ func statusBoxStyle(title, status string) lipgloss.Style {
 		Padding(1, 3).
 		Width(width).
 		Align(lipgloss.Center)
+}
+
+func (m Model) contextForMsg(msg tea.Msg) context.Context {
+	switch msg := msg.(type) {
+	case DOMChangedMsg:
+		if msg.Ctx != nil {
+			return msg.Ctx
+		}
+	case MCPConnectedMsg:
+		if msg.Ctx != nil {
+			return msg.Ctx
+		}
+	case MCPDisconnectedMsg:
+		if msg.Ctx != nil {
+			return msg.Ctx
+		}
+	case scriptTimerMsg:
+		if msg.Ctx != nil {
+			return msg.Ctx
+		}
+	}
+	if m.traceCtx != nil {
+		return m.traceCtx
+	}
+	return context.Background()
+}
+
+func messageType(msg tea.Msg) string {
+	switch msg.(type) {
+	case tea.WindowSizeMsg:
+		return "window_size"
+	case tea.KeyMsg:
+		return "key"
+	case DOMChangedMsg:
+		return "dom_changed"
+	case MCPConnectedMsg:
+		return "mcp_connected"
+	case MCPDisconnectedMsg:
+		return "mcp_disconnected"
+	case widget.CommandMsg:
+		return "widget_command"
+	case ShutdownMsg:
+		return "shutdown"
+	case scriptTimerMsg:
+		return "script_timer"
+	default:
+		return "unknown"
+	}
 }

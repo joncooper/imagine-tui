@@ -44,7 +44,7 @@ func replaceTree(t *testing.T, m Model, srv *imcp.Server, tree map[string]any) M
 	if result.IsError {
 		t.Fatalf("replace returned error: %v", result.Content)
 	}
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	return newM.(Model)
 }
 
@@ -57,7 +57,7 @@ func patchTree(t *testing.T, m Model, srv *imcp.Server, ops []map[string]any) Mo
 	if result.IsError {
 		t.Fatalf("patch returned error: %v", result.Content)
 	}
-	newM, _ := m.Update(DOMChangedMsg{})
+	newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 	return newM.(Model)
 }
 
@@ -188,7 +188,7 @@ func TestRenderPipeline(t *testing.T) {
 				},
 			},
 		})
-		newM, _ := m.Update(DOMChangedMsg{})
+		newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 		m = newM.(Model)
 
 		// View should be empty because width=0, height=0.
@@ -266,7 +266,7 @@ func TestRenderPipeline(t *testing.T) {
 		if result.IsError {
 			t.Fatalf("layout error: %v", result.Content)
 		}
-		newM, _ := m.Update(DOMChangedMsg{})
+		newM, _ := m.Update(DOMChangedMsg{Ctx: context.Background()})
 		m = newM.(Model)
 
 		// Populate with set_items.
@@ -283,7 +283,7 @@ func TestRenderPipeline(t *testing.T) {
 		if result.IsError {
 			t.Fatalf("set_items error: %v", result.Content)
 		}
-		newM, _ = m.Update(DOMChangedMsg{})
+		newM, _ = m.Update(DOMChangedMsg{Ctx: context.Background()})
 		m = newM.(Model)
 
 		view := m.View()

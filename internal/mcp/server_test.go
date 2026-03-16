@@ -1231,7 +1231,7 @@ func TestOnMutationCallback(t *testing.T) {
 		e := setupWithTree(t)
 		var mu sync.Mutex
 		calls := 0
-		e.server.SetOnMutation(func() {
+		e.server.SetOnMutation(func(context.Context) {
 			mu.Lock()
 			calls++
 			mu.Unlock()
@@ -1253,7 +1253,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("patch does not fire callback on error", func(t *testing.T) {
 		e := setup(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		r := e.call(t, "patch", map[string]any{
 			"ops": []any{
@@ -1273,7 +1273,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("replace whole tree fires callback", func(t *testing.T) {
 		e := setup(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		e.call(t, "replace", map[string]any{
 			"tree": map[string]any{
@@ -1293,7 +1293,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("replace subtree fires callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		e.call(t, "replace", map[string]any{
 			"target_id": "main",
@@ -1322,7 +1322,7 @@ func TestOnMutationCallback(t *testing.T) {
 
 		// Now register callback and restore.
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		e.call(t, "restore", map[string]any{"name": "before"})
 
@@ -1334,7 +1334,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("snapshot does not fire callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		e.call(t, "snapshot", map[string]any{"name": "test"})
 
@@ -1346,7 +1346,7 @@ func TestOnMutationCallback(t *testing.T) {
 	t.Run("query does not fire callback", func(t *testing.T) {
 		e := setupWithTree(t)
 		calls := 0
-		e.server.SetOnMutation(func() { calls++ })
+		e.server.SetOnMutation(func(context.Context) { calls++ })
 
 		e.call(t, "query", map[string]any{"ids": []any{"header"}})
 
@@ -1602,7 +1602,7 @@ func TestRemoveItemsTool_Basic(t *testing.T) {
 func TestSetItems_FiresMutationCallback(t *testing.T) {
 	e := setupWithTemplate(t)
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	e.server.SetOnMutation(func(context.Context) { calls++ })
 
 	e.call(t, "set_items", map[string]any{
 		"target": "log-list",
@@ -1622,7 +1622,7 @@ func TestAppendItems_FiresMutationCallback(t *testing.T) {
 	})
 
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	e.server.SetOnMutation(func(context.Context) { calls++ })
 
 	e.call(t, "append_items", map[string]any{
 		"target": "log-list",
@@ -1642,7 +1642,7 @@ func TestRemoveItems_FiresMutationCallback(t *testing.T) {
 	})
 
 	calls := 0
-	e.server.SetOnMutation(func() { calls++ })
+	e.server.SetOnMutation(func(context.Context) { calls++ })
 
 	e.call(t, "remove_items", map[string]any{
 		"target": "log-list",

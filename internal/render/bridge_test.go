@@ -26,13 +26,17 @@ func TestBridgeNotifiesOnDOMChange(t *testing.T) {
 	mp := &mockProgram{}
 	bridge := NewBridge(srv, mp)
 
-	bridge.NotifyDOMChanged()
+	bridge.NotifyDOMChanged(imcp.MutationKindResetFocus)
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(mp.msgs))
 	}
-	if _, ok := mp.msgs[0].(DOMChangedMsg); !ok {
+	msg, ok := mp.msgs[0].(DOMChangedMsg)
+	if !ok {
 		t.Errorf("expected DOMChangedMsg, got %T", mp.msgs[0])
+	}
+	if msg.MutationKind != imcp.MutationKindResetFocus {
+		t.Errorf("MutationKind = %q, want %q", msg.MutationKind, imcp.MutationKindResetFocus)
 	}
 }
 
@@ -108,12 +112,19 @@ func TestBridgeOnMutationCallback(t *testing.T) {
 	var called atomic.Int32
 	bridge.OnMutation = func() { called.Add(1) }
 
-	bridge.NotifyDOMChanged()
+	bridge.NotifyDOMChanged(imcp.MutationKindUpdate)
 
 	if called.Load() != 1 {
 		t.Errorf("OnMutation called %d times, want 1", called.Load())
 	}
 	if len(mp.msgs) != 1 {
 		t.Errorf("expected 1 msg, got %d", len(mp.msgs))
+	}
+	msg, ok := mp.msgs[0].(DOMChangedMsg)
+	if !ok {
+		t.Fatalf("expected DOMChangedMsg, got %T", mp.msgs[0])
+	}
+	if msg.MutationKind != imcp.MutationKindUpdate {
+		t.Errorf("MutationKind = %q, want %q", msg.MutationKind, imcp.MutationKindUpdate)
 	}
 }

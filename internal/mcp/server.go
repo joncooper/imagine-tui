@@ -21,6 +21,16 @@ import (
 // ToolHandler is the signature for a tool handler function.
 type ToolHandler = func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
+// MutationKind describes how a successful tool call changed the DOM.
+type MutationKind string
+
+const (
+	// MutationKindUpdate preserves focus when the focused node is still valid.
+	MutationKindUpdate MutationKind = "update"
+	// MutationKindResetFocus reinitializes focus from initial_focus / DOM order.
+	MutationKindResetFocus MutationKind = "reset_focus"
+)
+
 // Server wraps the MCP server with a DOM tree, event queue, and snapshot store.
 type Server struct {
 	mu         sync.RWMutex
@@ -30,7 +40,7 @@ type Server struct {
 	srv        *mcp.Server
 	handlers   map[string]ToolHandler // tool name -> handler, for direct invocation
 	shutdown   chan struct{}
-	onMutation func() // called after DOM-mutating operations (patch, replace, restore)
+	onMutation func(MutationKind) // called after successful DOM mutations
 	logger     *slog.Logger
 }
 
@@ -41,14 +51,14 @@ func (s *Server) SetLogger(l *slog.Logger) {
 
 // SetOnMutation registers a callback that fires after successful DOM mutations.
 // Used to notify BubbleTea of DOM changes so it can re-render.
-func (s *Server) SetOnMutation(fn func()) {
+func (s *Server) SetOnMutation(fn func(MutationKind)) {
 	s.onMutation = fn
 }
 
 // notifyMutation calls the mutation callback if one is registered.
-func (s *Server) notifyMutation() {
+func (s *Server) notifyMutation(kind MutationKind) {
 	if s.onMutation != nil {
-		s.onMutation()
+		s.onMutation(kind)
 	}
 }
 
@@ -428,7 +438,7 @@ func (s *Server) handlePatch(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	}
 
 	s.logger.Info("patch: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -468,7 +478,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 		summary := s.tree.Summary()
 		s.mu.Unlock()
 		s.logger.Info("replace: success", "node_count", nodeCount, "tree_summary", summary)
-		s.notifyMutation()
+		s.notifyMutation(MutationKindResetFocus)
 		return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 	}
 
@@ -488,7 +498,7 @@ func (s *Server) handleReplace(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 	s.mu.Unlock()
 
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okResult{OK: true})
 }
 
@@ -578,7 +588,7 @@ func (s *Server) handleRestore(ctx context.Context, req *mcp.CallToolRequest) (*
 		return errResult(err.Error()), nil
 	}
 
-	s.notifyMutation()
+	s.notifyMutation(MutationKindResetFocus)
 	return jsonResult(okNameResult{OK: true, Restored: input.Name})
 }
 
@@ -836,7 +846,7 @@ func (s *Server) handleLayout(ctx context.Context, req *mcp.CallToolRequest) (*m
 	s.mu.Unlock()
 
 	s.logger.Info("layout: success", "node_count", nodeCount)
-	s.notifyMutation()
+	s.notifyMutation(MutationKindResetFocus)
 	return jsonResult(okCountResult{OK: true, NodeCount: nodeCount})
 }
 
@@ -870,7 +880,7 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 	}
 
 	s.logger.Info("set_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -906,7 +916,7 @@ func (s *Server) handleAppendItems(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	s.logger.Info("append_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Count: len(items)})
 }
 
@@ -942,7 +952,7 @@ func (s *Server) handleRemoveItems(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	s.logger.Info("remove_items: success")
-	s.notifyMutation()
+	s.notifyMutation(MutationKindUpdate)
 	return jsonResult(okCountResult{OK: true, Removed: len(keys)})
 }
 

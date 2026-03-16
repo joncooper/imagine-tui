@@ -375,13 +375,17 @@ func TestBridgeIntegrationPatchSendsMsg(t *testing.T) {
 			},
 		},
 	})
-	bridge.NotifyDOMChanged()
+	bridge.NotifyDOMChanged(imcp.MutationKindResetFocus)
 
 	if len(mp.msgs) != 1 {
 		t.Fatalf("expected 1 msg, got %d", len(mp.msgs))
 	}
-	if _, ok := mp.msgs[0].(DOMChangedMsg); !ok {
+	msg, ok := mp.msgs[0].(DOMChangedMsg)
+	if !ok {
 		t.Errorf("expected DOMChangedMsg, got %T", mp.msgs[0])
+	}
+	if msg.MutationKind != imcp.MutationKindResetFocus {
+		t.Errorf("MutationKind = %q, want %q", msg.MutationKind, imcp.MutationKindResetFocus)
 	}
 }
 

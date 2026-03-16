@@ -1,11 +1,17 @@
 package render
 
-import "time"
+import (
+	"time"
+
+	imcp "github.com/joncooper/imagine-tui/internal/mcp"
+)
 
 // DOMChangedMsg is sent to the BubbleTea program when the DOM tree has been
-// mutated by an MCP tool call (patch, replace, restore). The Update loop
-// re-syncs the widget tree and re-renders.
-type DOMChangedMsg struct{}
+// mutated by an MCP tool call. The Update loop re-syncs the widget tree,
+// re-renders, and may reinitialize focus for whole-tree mutations.
+type DOMChangedMsg struct {
+	MutationKind imcp.MutationKind
+}
 
 // MCPDisconnectedMsg is sent when the MCP connection breaks (e.g., broken pipe).
 type MCPDisconnectedMsg struct {

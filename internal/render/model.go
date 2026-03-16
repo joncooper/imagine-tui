@@ -85,6 +85,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DOMChangedMsg:
 		m.logger.Info("DOM changed, syncing state")
+		if msg.MutationKind == imcp.MutationKindResetFocus {
+			m.focusedID = ""
+		}
 		cmd, err := m.refreshScriptsAndWidgets()
 		if err != nil {
 			m.logger.Error("script sync failed", "error", err)

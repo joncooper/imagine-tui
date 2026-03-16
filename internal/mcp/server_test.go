@@ -195,6 +195,52 @@ func TestServerListsAllTools(t *testing.T) {
 	}
 }
 
+func TestSetItemsToolMetadataPrefersPushItems(t *testing.T) {
+	e := setup(t)
+
+	result, err := e.session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.Name != "set_items" {
+			continue
+		}
+
+		if !strings.Contains(tool.Description, "push-items") {
+			t.Fatalf("set_items description = %q, want push-items guidance", tool.Description)
+		}
+
+		schema, ok := tool.InputSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("set_items input schema type = %T, want map[string]any", tool.InputSchema)
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("set_items properties type = %T, want map[string]any", schema["properties"])
+		}
+		if _, ok := props["file"]; ok {
+			t.Fatal("set_items input schema should not advertise file")
+		}
+		if _, ok := props["format"]; ok {
+			t.Fatal("set_items input schema should not advertise format")
+		}
+		return
+	}
+
+	t.Fatal("set_items tool not found")
+}
+
+func TestServerInstructionsMentionPushItems(t *testing.T) {
+	if !strings.Contains(serverInstructions, "push-items") {
+		t.Fatalf("server instructions missing push-items guidance:\n%s", serverInstructions)
+	}
+	if strings.Contains(serverInstructions, "set_items accepts either inline items or file-based loading") {
+		t.Fatalf("server instructions still advertise server-side file loading:\n%s", serverInstructions)
+	}
+}
+
 func TestServerShutdown(t *testing.T) {
 	s, err := NewServer()
 	if err != nil {
@@ -1542,7 +1588,7 @@ func TestSetItemsTool_ReplacesExisting(t *testing.T) {
 	}
 }
 
-func TestSetItemsTool_FileJSON(t *testing.T) {
+func TestSetItemsTool_FileParameterRejected(t *testing.T) {
 	e := setupWithTemplate(t)
 
 	dir := t.TempDir()
@@ -1559,46 +1605,16 @@ func TestSetItemsTool_FileJSON(t *testing.T) {
 		"target": "log-list",
 		"file":   path,
 	})
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", resultText(t, result))
+	if !result.IsError {
+		t.Fatal("expected file-based set_items to be rejected")
 	}
-	m := resultMap(t, result)
-	if m["count"] != float64(2) {
-		t.Fatalf("count = %v, want 2", m["count"])
-	}
-
-	list := e.server.Tree().Find("log-list")
-	if len(list.Children) != 2 {
-		t.Fatalf("children = %d, want 2", len(list.Children))
+	text := resultText(t, result)
+	if !strings.Contains(text, "push-items") {
+		t.Fatalf("unexpected error: %s", text)
 	}
 }
 
-func TestSetItemsTool_FileJSONL(t *testing.T) {
-	e := setupWithTemplate(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "items.jsonl")
-	data := `{"level":"INFO","msg":"server started"}
-{"level":"WARN","msg":"cache warm"}
-`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	result := e.call(t, "set_items", map[string]any{
-		"target": "log-list",
-		"file":   path,
-	})
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", resultText(t, result))
-	}
-	m := resultMap(t, result)
-	if m["count"] != float64(2) {
-		t.Fatalf("count = %v, want 2", m["count"])
-	}
-}
-
-func TestSetItemsTool_FileAndItemsConflict(t *testing.T) {
+func TestSetItemsTool_FileRejectedEvenWithItems(t *testing.T) {
 	e := setupWithTemplate(t)
 
 	dir := t.TempDir()
@@ -1613,34 +1629,10 @@ func TestSetItemsTool_FileAndItemsConflict(t *testing.T) {
 		"file":   path,
 	})
 	if !result.IsError {
-		t.Fatal("expected error when both items and file are provided")
+		t.Fatal("expected file-based set_items to be rejected")
 	}
-	if got := resultText(t, result); !strings.Contains(got, "either items or file") {
+	if got := resultText(t, result); !strings.Contains(got, "push-items") {
 		t.Fatalf("unexpected error: %s", got)
-	}
-}
-
-func TestSetItemsTool_RawLogFileNotSupported(t *testing.T) {
-	e := setupWithTemplate(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "app.log")
-	data := `2026-03-16T12:00:00Z INFO [api] started
-2026-03-16T12:00:01Z ERROR [api] failed`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	result := e.call(t, "set_items", map[string]any{
-		"target": "log-list",
-		"file":   path,
-	})
-	if !result.IsError {
-		t.Fatal("expected raw log file to be rejected")
-	}
-	text := resultText(t, result)
-	if !strings.Contains(text, "raw log parsing is not supported yet") {
-		t.Fatalf("unexpected error: %s", text)
 	}
 }
 
@@ -1663,6 +1655,20 @@ func TestSetItemsTool_NoTemplate(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Error("expected error for node without item_template")
+	}
+}
+
+func TestSetItemsTool_MissingItems(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+	})
+	if !result.IsError {
+		t.Fatal("expected missing items to be rejected")
+	}
+	if got := resultText(t, result); !strings.Contains(got, "missing required parameter: items") {
+		t.Fatalf("unexpected error: %s", got)
 	}
 }
 

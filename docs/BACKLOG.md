@@ -149,15 +149,15 @@ Items not tied to a milestone. Will be scheduled as needed.
 - **TDD**: golden file tests for constrained containers, overflow clipping
 
 ### Raw log parsing convenience
-- `set_items(file: ...)` now covers the biggest ingestion bottleneck for structured data with JSON arrays and JSONL/NDJSON.
-- Deliberately defer raw text log parsing (`load_log` or `set_items(..., format: "log", pattern: ...)`) until the generic file-loading path has been exercised in demos and agent sessions.
-- If and when this lands, prefer extending `set_items` rather than creating a separate tool so the data-loading model stays consistent.
+- `set_items` intentionally stays inline-only so imagine-tui does not become a server-side file reader.
+- Large local datasets should be pushed from the caller side with `imagine-tui push-items --socket <socket> --target <id> --file <path> [--format ...]`, which keeps file access in the caller's trust boundary and avoids dumping file contents into model tokens.
+- Deliberately defer raw text log parsing (`load_log` or a future `push-items --format log`) until the caller-side bulk-ingest path has been exercised in demos and agent sessions.
 - Likely scope: pattern-based extraction for common line-oriented logs plus a few presets for typical timestamp/severity/source/message layouts.
 
 ### Layout data preservation
 - `layout` currently replaces the entire tree, which clears data previously loaded through `set_items`.
 - Current guidance is to use `snapshot` / `restore` around structural experiments rather than trying to preserve loaded data across relayouts automatically.
-- Future follow-up: explore a structure-only relayout path or an explicit preserve-state mode once the generic file-loading and focus improvements have settled.
+- Future follow-up: explore a structure-only relayout path or an explicit preserve-state mode once the caller-side bulk-ingest and focus improvements have settled.
 
 ### Flex layout & layout managers
 - Flex grow/shrink (one panel fills remaining space after siblings)

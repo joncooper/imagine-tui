@@ -103,9 +103,10 @@ Call describe_widgets for full details on any widget type.
 ## Data pattern
 For data-heavy UIs, use layout + set_items instead of generating large JSON patches.
 Define the structure once with layout, then send compact data arrays with set_items.
-set_items accepts either inline items or file-based loading from JSON / JSONL.
+set_items accepts inline items only.
+For large local datasets, keep file access on the caller side: if the server is running on a Unix socket, use imagine-tui push-items --socket <socket-path> --target <id> --file <path> [--format json|jsonl|ndjson] instead of pasting file contents into tool arguments.
 For log widgets, use append_items to add new lines without resending the entire array.
-Raw text log parsing is not supported yet; convert logs to JSON / JSONL first.
+push-items supports JSON arrays and JSONL/NDJSON. Raw text log parsing is not supported yet; convert logs to JSON or JSONL first.
 This is 10-20x fewer tokens than raw DOM manipulation.`
 
 // NewServer creates a new MCP server with all tool declarations registered.
@@ -638,12 +639,10 @@ func layoutTool() *mcp.Tool {
 func setItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "set_items",
-		Description: "Populate a list, table, log, or templated container with data. Provide either inline items or a file path. Supported file formats: JSON arrays of objects and JSONL/NDJSON. Raw text log parsing is not supported yet. Replaces all existing items.",
+		Description: "Populate a list, table, log, or templated container with inline data. For large local datasets, prefer the caller-side helper imagine-tui push-items --socket <socket-path> --target <id> --file <path> [--format json|jsonl|ndjson] when the server is running on a Unix socket. Replaces all existing items.",
 		InputSchema: schema(map[string]JSONSchema{
 			"target": {Type: "string", Description: "ID of the list, table, log node, or container with item_template"},
-			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders. Mutually exclusive with file."},
-			"file":   {Type: "string", Description: "Path to a JSON array or JSONL/NDJSON file containing objects. Mutually exclusive with items."},
-			"format": {Type: "string", Description: "Optional file format override: auto, json, jsonl, or ndjson."},
+			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders. Required for set_items."},
 		}, "target"),
 	}
 }
@@ -863,7 +862,7 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult("missing required parameter: target"), nil
 	}
 
-	items, err := loadItems(input)
+	items, err := loadSetItemsItems(input)
 	if err != nil {
 		return errResult(err.Error()), nil
 	}

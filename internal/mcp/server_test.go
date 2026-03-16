@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1514,6 +1516,108 @@ func TestSetItemsTool_ReplacesExisting(t *testing.T) {
 	}
 }
 
+func TestSetItemsTool_FileJSON(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "items.json")
+	data := `[
+		{"level":"INFO","msg":"server started"},
+		{"level":"ERROR","msg":"disk full"}
+	]`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"file":   path,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+	m := resultMap(t, result)
+	if m["count"] != float64(2) {
+		t.Fatalf("count = %v, want 2", m["count"])
+	}
+
+	list := e.server.Tree().Find("log-list")
+	if len(list.Children) != 2 {
+		t.Fatalf("children = %d, want 2", len(list.Children))
+	}
+}
+
+func TestSetItemsTool_FileJSONL(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "items.jsonl")
+	data := `{"level":"INFO","msg":"server started"}
+{"level":"WARN","msg":"cache warm"}
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"file":   path,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", resultText(t, result))
+	}
+	m := resultMap(t, result)
+	if m["count"] != float64(2) {
+		t.Fatalf("count = %v, want 2", m["count"])
+	}
+}
+
+func TestSetItemsTool_FileAndItemsConflict(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "items.json")
+	if err := os.WriteFile(path, []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"items":  []any{map[string]any{"level": "INFO", "msg": "x"}},
+		"file":   path,
+	})
+	if !result.IsError {
+		t.Fatal("expected error when both items and file are provided")
+	}
+	if got := resultText(t, result); !strings.Contains(got, "either items or file") {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
+func TestSetItemsTool_RawLogFileNotSupported(t *testing.T) {
+	e := setupWithTemplate(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	data := `2026-03-16T12:00:00Z INFO [api] started
+2026-03-16T12:00:01Z ERROR [api] failed`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := e.call(t, "set_items", map[string]any{
+		"target": "log-list",
+		"file":   path,
+	})
+	if !result.IsError {
+		t.Fatal("expected raw log file to be rejected")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "raw log parsing is not supported yet") {
+		t.Fatalf("unexpected error: %s", text)
+	}
+}
+
 func TestSetItemsTool_MissingTarget(t *testing.T) {
 	e := setupWithTemplate(t)
 	result := e.call(t, "set_items", map[string]any{
@@ -1716,6 +1820,38 @@ func TestDescribeWidgets_SingleType(t *testing.T) {
 	}
 	if !strings.Contains(text, "select") {
 		t.Errorf("expected select event in list info, got: %s", text)
+	}
+}
+
+func TestDescribeWidgets_DocumentsFocusAndLayoutGuidance(t *testing.T) {
+	s, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "table"})
+	text := resultText(t, result)
+
+	for _, want := range []string{
+		"Tab/Shift-Tab",
+		"initial_focus",
+		"Arrow keys work only when the table has focus",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing focus guidance %q in table info", want)
+		}
+	}
+
+	container := callHandlerDirect(t, s, "describe_widgets", map[string]any{"type": "container"})
+	containerText := resultText(t, container)
+	for _, want := range []string{
+		"layout replaces the whole tree",
+		"snapshot",
+		"height + overflow",
+		"Five-widget example",
+	} {
+		if !strings.Contains(containerText, want) {
+			t.Errorf("missing container guidance %q", want)
+		}
 	}
 }
 

@@ -59,7 +59,7 @@ const serverInstructions = `imagine-tui is an MCP server that renders interactiv
 ## Getting started
 1. Call describe_widgets to discover available widget types, their props, and events.
 2. Call layout to define your UI structure as a tree of widgets.
-3. Call set_items to populate list or table widgets with data.
+3. Call set_items to populate list, table, log, or templated container widgets with data.
 4. Call await_event to wait for user interaction, then respond by updating the UI.
 
 ## Key tools
@@ -83,10 +83,19 @@ table (sortable, expandable rows), button, input, textarea, select, code, log,
 diff, progress, spinner, markdown, and sparkline.
 Call describe_widgets for full details on any widget type.
 
+## Focus and keyboard
+- Focus starts on the first focusable node in DOM order after layout/replace.
+- Tab and Shift-Tab cycle through focusable widgets.
+- Arrow keys and Enter are routed only to the currently focused widget.
+- To override DOM-order focus after layout, set root props.initial_focus to a focusable node ID.
+- Call describe_widgets for per-widget key bindings, focus rules, and examples.
+
 ## Data pattern
 For data-heavy UIs, use layout + set_items instead of generating large JSON patches.
 Define the structure once with layout, then send compact data arrays with set_items.
+set_items accepts either inline items or file-based loading from JSON / JSONL.
 For log widgets, use append_items to add new lines without resending the entire array.
+Raw text log parsing is not supported yet; convert logs to JSON / JSONL first.
 This is 10-20x fewer tokens than raw DOM manipulation.`
 
 // NewServer creates a new MCP server with all tool declarations registered.
@@ -218,6 +227,8 @@ type layoutInput struct {
 type setItemsInput struct {
 	Target string          `json:"target"`
 	Items  json.RawMessage `json:"items"`
+	File   string          `json:"file,omitempty"`
+	Format string          `json:"format,omitempty"`
 }
 
 type removeItemsInput struct {
@@ -617,11 +628,13 @@ func layoutTool() *mcp.Tool {
 func setItemsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "set_items",
-		Description: "Populate a list, table, log, or templated container with data. For list nodes: items are {id, label, badge, style}. For table nodes: items are row objects. For log nodes: items are {text, level, timestamp}. For containers with item_template: items are expanded through the template. Replaces all existing items.",
+		Description: "Populate a list, table, log, or templated container with data. Provide either inline items or a file path. Supported file formats: JSON arrays of objects and JSONL/NDJSON. Raw text log parsing is not supported yet. Replaces all existing items.",
 		InputSchema: schema(map[string]JSONSchema{
-			"target": {Type: "string", Description: "ID of the list node or container with item_template"},
-			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders."},
-		}, "target", "items"),
+			"target": {Type: "string", Description: "ID of the list, table, log node, or container with item_template"},
+			"items":  {Type: "array", Description: "Array of data objects. For lists: {id, label, badge, style}. For templates: keys map to {{key}} placeholders. Mutually exclusive with file."},
+			"file":   {Type: "string", Description: "Path to a JSON array or JSONL/NDJSON file containing objects. Mutually exclusive with items."},
+			"format": {Type: "string", Description: "Optional file format override: auto, json, jsonl, or ndjson."},
+		}, "target"),
 	}
 }
 
@@ -650,7 +663,7 @@ func removeItemsTool() *mcp.Tool {
 func describeWidgetsTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "describe_widgets",
-		Description: "List available widget types with their props, events, and capabilities. Call this before building a UI to discover what widgets you can use. Optionally filter by type.",
+		Description: "List available widget types with their props, events, capabilities, key bindings, focus behavior, layout gotchas, and examples. Call this before building a UI. Optionally filter by type.",
 		InputSchema: schema(map[string]JSONSchema{
 			"type": {Type: "string", Description: "Optional: filter to a specific widget type (e.g. \"list\", \"table\")"},
 		}),
@@ -840,17 +853,15 @@ func (s *Server) handleSetItems(ctx context.Context, req *mcp.CallToolRequest) (
 		return errResult("missing required parameter: target"), nil
 	}
 
-	var items []map[string]any
-	if len(input.Items) > 0 {
-		if err := json.Unmarshal(input.Items, &items); err != nil {
-			return errResult(fmt.Sprintf("invalid items: %v", err)), nil
-		}
+	items, err := loadItems(input)
+	if err != nil {
+		return errResult(err.Error()), nil
 	}
 
 	s.logger.Info("set_items", "target", input.Target, "item_count", len(items))
 
 	s.mu.Lock()
-	err := s.tree.SetItems(input.Target, items)
+	err = s.tree.SetItems(input.Target, items)
 	s.mu.Unlock()
 
 	if err != nil {
